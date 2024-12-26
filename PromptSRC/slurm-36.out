@@ -1,0 +1,14 @@
+Evaluating model
+Runing the first phase job and save the output to output/base2new/test_new//shots_16/CoCoOp/vit_b16_c4_ep10_batch1_ctxv1/seed
+usage: train.py [-h] [--root ROOT] [--output-dir OUTPUT_DIR] [--resume RESUME]
+                [--seed SEED]
+                [--source-domains SOURCE_DOMAINS [SOURCE_DOMAINS ...]]
+                [--target-domains TARGET_DOMAINS [TARGET_DOMAINS ...]]
+                [--transforms TRANSFORMS [TRANSFORMS ...]]
+                [--config-file CONFIG_FILE]
+                [--dataset-config-file DATASET_CONFIG_FILE]
+                [--trainer TRAINER] [--backbone BACKBONE] [--head HEAD]
+                [--eval-only] [--model-dir MODEL_DIR]
+                [--load-epoch LOAD_EPOCH] [--no-train]
+                ...
+train.py: error: argument --seed: expected one argument

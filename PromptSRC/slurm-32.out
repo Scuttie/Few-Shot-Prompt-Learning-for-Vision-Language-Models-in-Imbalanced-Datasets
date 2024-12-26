@@ -1,0 +1,6 @@
+Evaluating model
+Runing the first phase job and save the output to output/base2new/test_new//shots_16/CoCoOp/vit_b16_c4_ep10_batch1_ctxv1/seed
+Traceback (most recent call last):
+  File "/home/jewonyeom/prompt_learning/PromptSRC/train.py", line 2, in <module>
+    import torch
+ModuleNotFoundError: No module named 'torch'

@@ -1,0 +1,18 @@
+Single-shot mode: NUM_SHOTS=-1, PER_CLASS_SHOTS=[16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+Traceback (most recent call last):
+  File "/home/jewonyeom/prompt_learning/PromptSRC/train.py", line 251, in <module>
+    main(args)
+  File "/home/jewonyeom/prompt_learning/PromptSRC/train.py", line 163, in main
+    cfg = setup_cfg(args)
+          ^^^^^^^^^^^^^^^
+  File "/home/jewonyeom/prompt_learning/PromptSRC/train.py", line 145, in setup_cfg
+    cfg.merge_from_file(args.dataset_config_file)
+  File "/home/jewonyeom/anaconda3/lib/python3.12/site-packages/yacs/config.py", line 213, in merge_from_file
+    self.merge_from_other_cfg(cfg)
+  File "/home/jewonyeom/anaconda3/lib/python3.12/site-packages/yacs/config.py", line 217, in merge_from_other_cfg
+    _merge_a_into_b(cfg_other, self, self, [])
+  File "/home/jewonyeom/anaconda3/lib/python3.12/site-packages/yacs/config.py", line 478, in _merge_a_into_b
+    _merge_a_into_b(v, b[k], root, key_list + [k])
+  File "/home/jewonyeom/anaconda3/lib/python3.12/site-packages/yacs/config.py", line 491, in _merge_a_into_b
+    raise KeyError("Non-existent config key: {}".format(full_key))
+KeyError: 'Non-existent config key: DATASET.PER_CLASS_SHOTS'

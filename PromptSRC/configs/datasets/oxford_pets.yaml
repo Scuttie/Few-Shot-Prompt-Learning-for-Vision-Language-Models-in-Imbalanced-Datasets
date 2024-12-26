@@ -1,0 +1,5 @@
+DATASET:
+  NAME: "OxfordPets"
+  NUM_SHOTS: 16           # int
+  PER_CLASS_SHOTS: []     # list
+  SUBSAMPLE_CLASSES: "all"  # base/new/all 
