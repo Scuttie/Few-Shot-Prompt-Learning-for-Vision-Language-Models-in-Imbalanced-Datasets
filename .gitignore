@@ -3,3 +3,32 @@ OxfordPets/images.tar.gz
 *.zip
 *.tar
 OxfordPets/
+# 1) 모델 가중치(예: *.pth.tar, *.pth)
+*.pth
+*.pth.tar*
+*.pt
+
+# 2) output 폴더 (전체 무시)
+PromptSRC/output/
+
+# 3) tar, tar.gz 파일 (압축본들)
+*.tar
+*.tar.gz
+*.zip
+
+# 4) 기타 대형 로그, 캐시 파일
+*.log
+*.tfevents.*
+# Slurm logs
+slurm-*.out
+
+# (추가) 모델 가중치
+*.pth
+*.pth.tar*
+
+# (추가) output 폴더
+PromptSRC/output/
+
+# (추가) tar, tar.gz 파일
+*.tar
+*.tar.gz
