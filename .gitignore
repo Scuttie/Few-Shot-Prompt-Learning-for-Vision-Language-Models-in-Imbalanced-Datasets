@@ -16,3 +16,16 @@ PromptSRC/output/
 *.log
 *.tfevents.*
 slurm-*.out
+
+# (추가) 모델 가중치
+*.pth
+*.pth.tar*
+
+# (추가) output 폴더
+PromptSRC/output/
+
+# (추가) tar, tar.gz 파일
+*.tar
+*.tar.gz
+
+fgvc_aircraft/
