@@ -16,7 +16,7 @@ CFG=vit_b16_c2_ep5_batch4_2ctx
 # PER_CLASS_SHOTS="[]"
 
 # (B) 클래스별 샷
-SHOTS=-1
+SHOTS=-2
 PER_CLASS_SHOTS="[16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]"
 
 DIR=output/base2new/train_all/${DATASET}/shots_${SHOTS}/${TRAINER}/${CFG}/seed${SEED}

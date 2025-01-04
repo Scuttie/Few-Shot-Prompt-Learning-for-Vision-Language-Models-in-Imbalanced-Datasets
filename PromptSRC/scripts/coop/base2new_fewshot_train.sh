@@ -8,8 +8,8 @@
 #
 # Example:
 #   bash base2new_train.sh \
-#       OxfordPets \
-#       vit_b16_c2_ep20_batch4_4+4ctx \
+#       oxford_pets \
+#       vit_b16_ep50\
 #       end \
 #       16 \
 #       16 \

@@ -1,6 +1,6 @@
 import os
 import pickle
-
+import random
 from dassl.data.datasets import DATASET_REGISTRY, Datum, DatasetBase
 from dassl.utils import mkdir_if_missing
 
@@ -9,7 +9,6 @@ from .oxford_pets import OxfordPets
 
 @DATASET_REGISTRY.register()
 class FGVCAircraft(DatasetBase):
-
     dataset_dir = "fgvc_aircraft"
 
     def __init__(self, cfg):
@@ -30,23 +29,49 @@ class FGVCAircraft(DatasetBase):
         val = self.read_data(cname2lab, "images_variant_val.txt")
         test = self.read_data(cname2lab, "images_variant_test.txt")
 
-        num_shots = cfg.DATASET.NUM_SHOTS
-        if num_shots >= 1:
-            seed = cfg.SEED
-            preprocessed = os.path.join(self.split_fewshot_dir, f"shot_{num_shots}-seed_{seed}.pkl")
-            
+        num_shots = cfg.DATASET.NUM_SHOTS           # int
+        per_class_shots = cfg.DATASET.PER_CLASS_SHOTS  # list
+        seed = cfg.SEED
+
+        if len(per_class_shots) > 0:
+            preprocessed = os.path.join(
+                self.split_fewshot_dir, f"per_class_shots-seed_{seed}.pkl"
+            )
+
             if os.path.exists(preprocessed):
-                print(f"Loading preprocessed few-shot data from {preprocessed}")
+                print(f"[FGVCAircraft] Loading per-class few-shot data from {preprocessed}")
                 with open(preprocessed, "rb") as file:
                     data = pickle.load(file)
                     train, val = data["train"], data["val"]
             else:
-                train = self.generate_fewshot_dataset(train, num_shots=num_shots)
-                val = self.generate_fewshot_dataset(val, num_shots=min(num_shots, 4))
+                val_shots_list = [min(s, 4) for s in per_class_shots]
+
+                train = self.generate_per_class_fewshot_dataset(train, per_class_shots)
+                val = self.generate_per_class_fewshot_dataset(val, val_shots_list)
+
                 data = {"train": train, "val": val}
-                print(f"Saving preprocessed few-shot data to {preprocessed}")
+                print(f"[FGVCAircraft] Saving per-class few-shot data to {preprocessed}")
                 with open(preprocessed, "wb") as file:
                     pickle.dump(data, file, protocol=pickle.HIGHEST_PROTOCOL)
+
+        else:
+            if num_shots >= 1:
+                preprocessed = os.path.join(
+                    self.split_fewshot_dir, f"shot_{num_shots}-seed_{seed}.pkl"
+                )
+
+                if os.path.exists(preprocessed):
+                    print(f"Loading preprocessed few-shot data from {preprocessed}")
+                    with open(preprocessed, "rb") as file:
+                        data = pickle.load(file)
+                        train, val = data["train"], data["val"]
+                else:
+                    train = self.generate_fewshot_dataset(train, num_shots=num_shots)
+                    val = self.generate_fewshot_dataset(val, num_shots=min(num_shots, 4))
+                    data = {"train": train, "val": val}
+                    print(f"Saving preprocessed few-shot data to {preprocessed}")
+                    with open(preprocessed, "wb") as file:
+                        pickle.dump(data, file, protocol=pickle.HIGHEST_PROTOCOL)
 
         subsample = cfg.DATASET.SUBSAMPLE_CLASSES
         train, val, test = OxfordPets.subsample_classes(train, val, test, subsample=subsample)
@@ -69,3 +94,34 @@ class FGVCAircraft(DatasetBase):
                 items.append(item)
 
         return items
+
+    @staticmethod
+    def generate_per_class_fewshot_dataset(dataset, shots_per_class):
+        from collections import defaultdict
+        tracker = defaultdict(list)
+        for idx, item in enumerate(dataset):
+            tracker[item.label].append(idx)
+
+        new_dataset = []
+        for cls_label, idxs in tracker.items():
+            n_shots = shots_per_class[cls_label]
+            random.shuffle(idxs)
+            selected_idxs = idxs[:n_shots]
+            for idx in selected_idxs:
+                new_dataset.append(dataset[idx])
+        return new_dataset
+
+    @staticmethod
+    def generate_fewshot_dataset(dataset, num_shots=1):
+        from collections import defaultdict
+        tracker = defaultdict(list)
+        for idx, item in enumerate(dataset):
+            tracker[item.label].append(idx)
+
+        new_dataset = []
+        for cls_label, idxs in tracker.items():
+            random.shuffle(idxs)
+            selected_idxs = idxs[:num_shots]
+            for idx in selected_idxs:
+                new_dataset.append(dataset[idx])
+        return new_dataset

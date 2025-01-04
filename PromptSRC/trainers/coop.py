@@ -28,10 +28,14 @@ def load_clip_to_cpu(cfg):
 
     except RuntimeError:
         state_dict = torch.load(model_path, map_location="cpu")
-    design_details = {"trainer": 'CoOp',
-                      "vision_depth": 0,
-                      "language_depth": 0, "vision_ctx": 0,
-                      "language_ctx": 0}
+
+    design_details = {
+        "trainer": 'CoOp',
+        "vision_depth": 0,
+        "language_depth": 0,
+        "vision_ctx": 0,
+        "language_ctx": 0
+    }
     model = clip.build_model(state_dict or model.state_dict(), design_details)
 
     return model
@@ -81,7 +85,6 @@ class PromptLearner(nn.Module):
                 embedding = clip_model.token_embedding(prompt).type(dtype)
             ctx_vectors = embedding[0, 1 : 1 + n_ctx, :]
             prompt_prefix = ctx_init
-
         else:
             # random initialization
             if cfg.TRAINER.COOP.CSC:
@@ -127,16 +130,11 @@ class PromptLearner(nn.Module):
         suffix = self.token_suffix
 
         if self.class_token_position == "end":
-            prompts = torch.cat(
-                [
-                    prefix,  # (n_cls, 1, dim)
-                    ctx,     # (n_cls, n_ctx, dim)
-                    suffix,  # (n_cls, *, dim)
-                ],
-                dim=1,
-            )
+            # 맨 뒤에 class명을 붙임
+            prompts = torch.cat([prefix, ctx, suffix], dim=1)
 
         elif self.class_token_position == "middle":
+            # 반을 나누어 가운데에 class명을 삽입
             half_n_ctx = self.n_ctx // 2
             prompts = []
             for i in range(self.n_cls):
@@ -147,19 +145,14 @@ class PromptLearner(nn.Module):
                 ctx_i_half1 = ctx[i : i + 1, :half_n_ctx, :]
                 ctx_i_half2 = ctx[i : i + 1, half_n_ctx:, :]
                 prompt = torch.cat(
-                    [
-                        prefix_i,     # (1, 1, dim)
-                        ctx_i_half1,  # (1, n_ctx//2, dim)
-                        class_i,      # (1, name_len, dim)
-                        ctx_i_half2,  # (1, n_ctx//2, dim)
-                        suffix_i,     # (1, *, dim)
-                    ],
+                    [prefix_i, ctx_i_half1, class_i, ctx_i_half2, suffix_i],
                     dim=1,
                 )
                 prompts.append(prompt)
             prompts = torch.cat(prompts, dim=0)
 
         elif self.class_token_position == "front":
+            # 맨 앞에 class명을 삽입
             prompts = []
             for i in range(self.n_cls):
                 name_len = self.name_lens[i]
@@ -167,15 +160,7 @@ class PromptLearner(nn.Module):
                 class_i = suffix[i : i + 1, :name_len, :]
                 suffix_i = suffix[i : i + 1, name_len:, :]
                 ctx_i = ctx[i : i + 1, :, :]
-                prompt = torch.cat(
-                    [
-                        prefix_i,  # (1, 1, dim)
-                        class_i,   # (1, name_len, dim)
-                        ctx_i,     # (1, n_ctx, dim)
-                        suffix_i,  # (1, *, dim)
-                    ],
-                    dim=1,
-                )
+                prompt = torch.cat([prefix_i, class_i, ctx_i, suffix_i], dim=1)
                 prompts.append(prompt)
             prompts = torch.cat(prompts, dim=0)
 
@@ -183,6 +168,60 @@ class PromptLearner(nn.Module):
             raise ValueError
 
         return prompts
+
+
+class MultiClassFocalLoss(nn.Module):
+    """
+    promptsrc.py에서 가져온 MultiClassFocalLoss 구현 예시
+    """
+    def __init__(self, alpha=None, gamma=2, reduction='mean'):
+        """
+        다중 클래스 Focal Loss.
+
+        Args:
+            alpha (Tensor or list, optional): 각 클래스에 대한 가중치. 클래스 불균형을 보완하기 위해 사용.
+                                              리스트나 텐서 형태로 각 클래스에 대한 가중치를 제공.
+            gamma (float): Focusing parameter.
+            reduction (str): 'none' | 'mean' | 'sum'.
+        """
+        super(MultiClassFocalLoss, self).__init__()
+        if isinstance(alpha, list):
+            self.alpha = torch.tensor(alpha, dtype=torch.float32)
+        elif isinstance(alpha, torch.Tensor):
+            self.alpha = alpha
+        elif alpha is None:
+            self.alpha = None
+        else:
+            raise TypeError('alpha must be None, list, or torch.Tensor')
+
+        self.gamma = gamma
+        self.reduction = reduction
+
+    def forward(self, inputs, targets):
+        """
+        Args:
+            inputs: 모델의 출력 logits, shape (batch_size, num_classes)
+            targets: 실제 레이블, shape (batch_size)
+        Returns:
+            Focal Loss 값
+        """
+        if self.alpha is not None:
+            if self.alpha.device != inputs.device:
+                self.alpha = self.alpha.to(inputs.device)
+            alpha = self.alpha[targets]  # 각 샘플의 클래스에 해당하는 alpha
+        else:
+            alpha = 1.0
+
+        ce_loss = F.cross_entropy(inputs, targets, reduction='none')
+        pt = torch.exp(-ce_loss)  # 모델이 정답을 맞출 확률
+        focal_loss = alpha * ((1 - pt) ** self.gamma) * ce_loss
+
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        else:
+            return focal_loss
 
 
 class CustomCLIP(nn.Module):
@@ -238,10 +277,19 @@ class CoOp(TrainerX):
 
         print("Turning off gradients in both the image and the text encoder")
         for name, param in self.model.named_parameters():
+            # 프롬프트 학습 파라미터 외는 freeze
             if "prompt_learner" not in name:
                 param.requires_grad_(False)
 
+        # --------------------
+        # Focal Loss 사용 예시
+        # --------------------
+        # 필요한 경우 alpha를 클래스별 비율에 맞춰 지정할 수 있습니다.
+        # 여기서는 예시로 alpha=None, gamma=2 설정
+        self.criterion = MultiClassFocalLoss(alpha=None, gamma=2, reduction='mean')
+
         if cfg.MODEL.INIT_WEIGHTS:
+            # 가중치 초기화 (프롬프트 파트만)
             load_pretrained_weights(self.model.prompt_learner, cfg.MODEL.INIT_WEIGHTS)
 
         self.model.to(self.device)
@@ -252,8 +300,7 @@ class CoOp(TrainerX):
 
         self.scaler = GradScaler() if cfg.TRAINER.COOP.PREC == "amp" else None
 
-        # Note that multi-gpu training could be slow because CLIP's size is
-        # big, which slows down the copy operation in DataParallel
+        # 다중 GPU 설정
         device_count = torch.cuda.device_count()
         if device_count > 1:
             print(f"Multiple GPUs detected (n_gpus={device_count}), use all of them!")
@@ -266,14 +313,16 @@ class CoOp(TrainerX):
         if prec == "amp":
             with autocast():
                 output = self.model(image)
-                loss = F.cross_entropy(output, label)
+                # 기존 cross entropy 대신 focal loss 적용
+                loss = self.criterion(output, label)
             self.optim.zero_grad()
             self.scaler.scale(loss).backward()
             self.scaler.step(self.optim)
             self.scaler.update()
         else:
             output = self.model(image)
-            loss = F.cross_entropy(output, label)
+            # 기존 cross entropy 대신 focal loss 적용
+            loss = self.criterion(output, label)
             self.model_backward_and_update(loss)
 
         loss_summary = {
@@ -319,10 +368,8 @@ class CoOp(TrainerX):
             # Ignore fixed token vectors
             if "token_prefix" in state_dict:
                 del state_dict["token_prefix"]
-
             if "token_suffix" in state_dict:
                 del state_dict["token_suffix"]
 
-            print("Loading weights to {} " 'from "{}" (epoch = {})'.format(name, model_path, epoch))
-            # set strict=False
+            print("Loading weights to {} from \"{}\" (epoch = {})".format(name, model_path, epoch))
             self._models[name].load_state_dict(state_dict, strict=False)

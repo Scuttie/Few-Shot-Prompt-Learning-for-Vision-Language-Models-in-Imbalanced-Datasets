@@ -3,9 +3,9 @@
 #SBATCH --partition=laal_a6000
 
 # cd ../..
-
+# Pets: "/home/jewonyeom/prompt_learning/OxfordPets"
 # custom config
-DATA="/home/jewonyeom/prompt_learning/OxfordPets"
+DATA="/shared"
 TRAINER=PromptSRC
 
 DATASET=$1
@@ -19,9 +19,11 @@ SUB=new
 # SHOTS=16
 # PER_CLASS_SHOTS="[]"
 
-# (B) 클래스별 샷
-SHOTS=-1
-PER_CLASS_SHOTS="[16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]"
+# (B) 클래스별 샷 (pets)
+# PER_CLASS_SHOTS="[16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]"
+
+SHOTS=-2
+PER_CLASS_SHOTS="[16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]"
 
 COMMON_DIR=${DATASET}/shots_${SHOTS}/${TRAINER}/${CFG}/seed${SEED}
 MODEL_DIR=output/base2new/train_all/${COMMON_DIR}

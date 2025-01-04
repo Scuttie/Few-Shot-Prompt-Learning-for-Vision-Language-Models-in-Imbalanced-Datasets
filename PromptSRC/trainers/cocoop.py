@@ -27,13 +27,16 @@ def load_clip_to_cpu(cfg):
         # loading JIT archive
         model = torch.jit.load(model_path, map_location="cpu").eval()
         state_dict = None
-
     except RuntimeError:
         state_dict = torch.load(model_path, map_location="cpu")
-    design_details = {"trainer": 'CoCoOp',
-                      "vision_depth": 0,
-                      "language_depth": 0, "vision_ctx": 0,
-                      "language_ctx": 0}
+
+    design_details = {
+        "trainer": 'CoCoOp',
+        "vision_depth": 0,
+        "language_depth": 0,
+        "vision_ctx": 0,
+        "language_ctx": 0
+    }
     model = clip.build_model(state_dict or model.state_dict(), design_details)
 
     return model
@@ -50,13 +53,13 @@ class TextEncoder(nn.Module):
 
     def forward(self, prompts, tokenized_prompts):
         x = prompts + self.positional_embedding.type(self.dtype)
-        x = x.permute(1, 0, 2)  # NLD -> LND
+        x = x.permute(1, 0, 2)  # (N, L, D) -> (L, N, D)
         x = self.transformer(x)
-        x = x.permute(1, 0, 2)  # LND -> NLD
+        x = x.permute(1, 0, 2)  # (L, N, D) -> (N, L, D)
         x = self.ln_final(x).type(self.dtype)
 
         # x.shape = [batch_size, n_ctx, transformer.width]
-        # take features from the eot embedding (eot_token is the highest number in each sequence)
+        # take features from the eot embedding (the highest number in each sequence)
         x = x[torch.arange(x.shape[0]), tokenized_prompts.argmax(dim=-1)] @ self.text_projection
 
         return x
@@ -73,7 +76,7 @@ class PromptLearner(nn.Module):
         vis_dim = clip_model.visual.output_dim
         clip_imsize = clip_model.visual.input_resolution
         cfg_imsize = cfg.INPUT.SIZE[0]
-        assert cfg_imsize == clip_imsize, f"cfg_imsize ({cfg_imsize}) must equal to clip_imsize ({clip_imsize})"
+        assert cfg_imsize == clip_imsize, f"cfg_imsize ({cfg_imsize}) must equal clip_imsize ({clip_imsize})"
 
         if ctx_init:
             # use given words to initialize context vectors
@@ -95,6 +98,7 @@ class PromptLearner(nn.Module):
 
         self.ctx = nn.Parameter(ctx_vectors)
 
+        # meta_net: 이미지 특징(im_features)에 기반해서 context token을 조금씩 shift
         self.meta_net = nn.Sequential(OrderedDict([
             ("linear1", nn.Linear(vis_dim, vis_dim // 16)),
             ("relu", nn.ReLU(inplace=True)),
@@ -112,11 +116,9 @@ class PromptLearner(nn.Module):
         with torch.no_grad():
             embedding = clip_model.token_embedding(tokenized_prompts).type(dtype)
 
-        # These token vectors will be saved when in save_model(),
-        # but they should be ignored in load_model() as we want to use
-        # those computed using the current class names
-        self.register_buffer("token_prefix", embedding[:, :1, :])  # SOS
-        self.register_buffer("token_suffix", embedding[:, 1 + n_ctx:, :])  # CLS, EOS
+        # 아래 prefix, suffix는 고정 (CLIP 소스 토큰)
+        self.register_buffer("token_prefix", embedding[:, :1, :])    # (n_cls, 1, ctx_dim)
+        self.register_buffer("token_suffix", embedding[:, 1 + n_ctx:, :])  # (n_cls, *, ctx_dim)
 
         self.n_cls = n_cls
         self.n_ctx = n_ctx
@@ -125,47 +127,99 @@ class PromptLearner(nn.Module):
 
     def construct_prompts(self, ctx, prefix, suffix, label=None):
         # dim0 is either batch_size (during training) or n_cls (during testing)
-        # ctx: context tokens, with shape of (dim0, n_ctx, ctx_dim)
-        # prefix: the sos token, with shape of (n_cls, 1, ctx_dim)
-        # suffix: remaining tokens, with shape of (n_cls, *, ctx_dim)
-
+        # ctx: context tokens, shape (dim0, n_ctx, ctx_dim)
+        # prefix: shape (n_cls, 1, ctx_dim)
+        # suffix: shape (n_cls, *, ctx_dim)
         if label is not None:
             prefix = prefix[label]
             suffix = suffix[label]
 
         prompts = torch.cat(
             [
-                prefix,  # (dim0, 1, dim)
-                ctx,  # (dim0, n_ctx, dim)
-                suffix,  # (dim0, *, dim)
+                prefix,   # (dim0, 1, dim)
+                ctx,      # (dim0, n_ctx, dim)
+                suffix,   # (dim0, *, dim)
             ],
             dim=1,
         )
-
         return prompts
 
     def forward(self, im_features):
-        prefix = self.token_prefix
-        suffix = self.token_suffix
-        ctx = self.ctx  # (n_ctx, ctx_dim)
+        prefix = self.token_prefix    # (n_cls, 1, ctx_dim)
+        suffix = self.token_suffix    # (n_cls, *, ctx_dim)
+        ctx = self.ctx                # (n_ctx, ctx_dim)
+
         bias = self.meta_net(im_features)  # (batch, ctx_dim)
-        bias = bias.unsqueeze(1)  # (batch, 1, ctx_dim)
-        ctx = ctx.unsqueeze(0)  # (1, n_ctx, ctx_dim)
-        ctx_shifted = ctx + bias  # (batch, n_ctx, ctx_dim)
+        bias = bias.unsqueeze(1)          # (batch, 1, ctx_dim)
+        ctx = ctx.unsqueeze(0)            # (1, n_ctx, ctx_dim)
+        ctx_shifted = ctx + bias          # (batch, n_ctx, ctx_dim)
 
-        # Use instance-conditioned context tokens for all classes
+        # 한 번의 forward에서 batch만큼의 이미지가 들어오므로
+        # 각 이미지별로 instance-conditioned prompt를 구성
         prompts = []
-        for ctx_shifted_i in ctx_shifted:
-            ctx_i = ctx_shifted_i.unsqueeze(0).expand(self.n_cls, -1, -1)
-            pts_i = self.construct_prompts(ctx_i, prefix, suffix)  # (n_cls, n_tkn, ctx_dim)
+        for ctx_shifted_i in ctx_shifted:  # (n_ctx, ctx_dim)
+            # 이 context는 n_cls 모두 공유하지만, batch dimension마다 달라짐
+            ctx_i = ctx_shifted_i.unsqueeze(0).expand(self.n_cls, -1, -1)  # (n_cls, n_ctx, ctx_dim)
+            pts_i = self.construct_prompts(ctx_i, prefix, suffix)          # (n_cls, n_tkn, ctx_dim)
             prompts.append(pts_i)
-        prompts = torch.stack(prompts)
-
+        # prompts: list of length batch, each item shape (n_cls, n_tkn, ctx_dim)
+        prompts = torch.stack(prompts)  # (batch, n_cls, n_tkn, ctx_dim)
         return prompts
 
 
+class MultiClassFocalLoss(nn.Module):
+    """
+    Multi-class Focal Loss (다중 클래스용).
+    """
+    def __init__(self, alpha=None, gamma=2, reduction='mean'):
+        """
+        Args:
+            alpha (Tensor or list, optional): 클래스별 가중치 보정을 위한 alpha.
+            gamma (float): Focal Loss의 focusing parameter.
+            reduction (str): 'none' | 'mean' | 'sum'.
+        """
+        super(MultiClassFocalLoss, self).__init__()
+        if isinstance(alpha, list):
+            self.alpha = torch.tensor(alpha, dtype=torch.float32)
+        elif isinstance(alpha, torch.Tensor):
+            self.alpha = alpha
+        elif alpha is None:
+            self.alpha = None
+        else:
+            raise TypeError('alpha must be None, list, or torch.Tensor')
+
+        self.gamma = gamma
+        self.reduction = reduction
+
+    def forward(self, inputs, targets):
+        """
+        Args:
+            inputs: 모델 출력 logits (batch, num_classes)
+            targets: 실제 레이블 (batch)
+        Returns:
+            Focal Loss 값
+        """
+        if self.alpha is not None:
+            if self.alpha.device != inputs.device:
+                self.alpha = self.alpha.to(inputs.device)
+            alpha = self.alpha[targets]  # 각 샘플의 클래스에 해당하는 alpha
+        else:
+            alpha = 1.0
+
+        ce_loss = F.cross_entropy(inputs, targets, reduction='none')
+        pt = torch.exp(-ce_loss)  # 모델이 정답을 맞출 확률
+        focal_loss = alpha * ((1 - pt) ** self.gamma) * ce_loss
+
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        else:
+            return focal_loss
+
+
 class CustomCLIP(nn.Module):
-    def __init__(self, cfg, classnames, clip_model):
+    def __init__(self, cfg, classnames, clip_model, criterion=None):
         super().__init__()
         self.prompt_learner = PromptLearner(cfg, classnames, clip_model)
         self.tokenized_prompts = self.prompt_learner.tokenized_prompts
@@ -174,26 +228,39 @@ class CustomCLIP(nn.Module):
         self.logit_scale = clip_model.logit_scale
         self.dtype = clip_model.dtype
 
+        # CoCoOp에서 사용할 Loss 함수 (기본: Cross Entropy -> 여기서는 Focal Loss)
+        self.criterion = criterion
+
     def forward(self, image, label=None):
+        """
+        image: (batch, C, H, W)
+        label: (batch)
+        """
         tokenized_prompts = self.tokenized_prompts
         logit_scale = self.logit_scale.exp()
 
+        # 1. 이미지 특징 추출
         image_features = self.image_encoder(image.type(self.dtype))
         image_features = image_features / image_features.norm(dim=-1, keepdim=True)
 
-        prompts = self.prompt_learner(image_features)
+        # 2. instance-conditioned prompts 생성
+        prompts = self.prompt_learner(image_features)  # (batch, n_cls, n_tkn, ctx_dim)
 
+        # 3. 각 이미지별 텍스트 특징 추출 및 로짓 계산
         logits = []
         for pts_i, imf_i in zip(prompts, image_features):
             text_features = self.text_encoder(pts_i, tokenized_prompts)
             text_features = text_features / text_features.norm(dim=-1, keepdim=True)
-            l_i = logit_scale * imf_i @ text_features.t()
+            l_i = logit_scale * imf_i @ text_features.t()  # (n_cls)
             logits.append(l_i)
+        # logits = (batch, n_cls)
         logits = torch.stack(logits)
 
+        # 4. 훈련 시 Loss 계산 (Focal Loss)
         if self.prompt_learner.training:
-            return F.cross_entropy(logits, label)
+            return self.criterion(logits, label)
 
+        # 추론 시 logits 반환
         return logits
 
 
@@ -214,11 +281,18 @@ class CoCoOp(TrainerX):
             clip_model.float()
 
         print("Building custom CLIP")
-        self.model = CustomCLIP(cfg, classnames, clip_model)
+
+        # -------------
+        # Focal Loss 설정
+        # -------------
+        # 필요한 경우 alpha에 클래스별 비율을 넣을 수 있음
+        focal_loss = MultiClassFocalLoss(alpha=None, gamma=2, reduction='mean')
+
+        # CustomCLIP을 초기화하면서 focal_loss를 전달
+        self.model = CustomCLIP(cfg, classnames, clip_model, criterion=focal_loss)
 
         print("Turning off gradients in both the image and the text encoder")
         name_to_update = "prompt_learner"
-
         for name, param in self.model.named_parameters():
             if name_to_update not in name:
                 param.requires_grad_(False)
@@ -231,9 +305,11 @@ class CoCoOp(TrainerX):
         print(f"Parameters to be updated: {enabled}")
 
         if cfg.MODEL.INIT_WEIGHTS:
+            # 프롬프트 학습 파트에만 초기 가중치가 들어가는 경우
             load_pretrained_weights(self.model.prompt_learner, cfg.MODEL.INIT_WEIGHTS)
 
         self.model.to(self.device)
+
         # NOTE: only give prompt_learner to the optimizer
         self.optim = build_optimizer(self.model.prompt_learner, cfg.OPTIM)
         self.sched = build_lr_scheduler(self.optim, cfg.OPTIM)
@@ -241,8 +317,7 @@ class CoCoOp(TrainerX):
 
         self.scaler = GradScaler() if cfg.TRAINER.COCOOP.PREC == "amp" else None
 
-        # Note that multi-gpu training could be slow because CLIP's size is
-        # big, which slows down the copy operation in DataParallel
+        # 멀티 GPU 사용 설정
         device_count = torch.cuda.device_count()
         if device_count > 1:
             print(f"Multiple GPUs detected (n_gpus={device_count}), use all of them!")
@@ -256,6 +331,7 @@ class CoCoOp(TrainerX):
         scaler = self.scaler
 
         prec = self.cfg.TRAINER.COCOOP.PREC
+
         if prec == "amp":
             with autocast():
                 loss = model(image, label)
@@ -271,6 +347,7 @@ class CoCoOp(TrainerX):
 
         loss_summary = {"loss": loss.item()}
 
+        # Epoch 마지막 배치 시 learning rate 업데이트
         if (self.batch_idx + 1) == self.num_batches:
             self.update_lr()
 
@@ -309,10 +386,8 @@ class CoCoOp(TrainerX):
             # Ignore fixed token vectors
             if "token_prefix" in state_dict:
                 del state_dict["token_prefix"]
-
             if "token_suffix" in state_dict:
                 del state_dict["token_suffix"]
 
-            print("Loading weights to {} " 'from "{}" (epoch = {})'.format(name, model_path, epoch))
-            # set strict=False
+            print("Loading weights to {} from \"{}\" (epoch = {})".format(name, model_path, epoch))
             self._models[name].load_state_dict(state_dict, strict=False)

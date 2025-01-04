@@ -1,7 +1,6 @@
-import os.path as osp
-from collections import OrderedDict
-import math
 import copy
+import os.path as osp
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
@@ -14,11 +13,11 @@ from dassl.optim import build_optimizer, build_lr_scheduler
 
 from clip import clip
 from clip.simple_tokenizer import SimpleTokenizer as _Tokenizer
+from .imagenet_templates import IMAGENET_TEMPLATES
 
 _tokenizer = _Tokenizer()
 
-
-def load_clip_to_cpu(cfg):
+def load_clip_to_cpu(cfg, zero_shot_model=False):
     backbone_name = cfg.MODEL.BACKBONE.NAME
     url = clip._MODELS[backbone_name]
     model_path = clip._download(url)
@@ -30,15 +29,26 @@ def load_clip_to_cpu(cfg):
 
     except RuntimeError:
         state_dict = torch.load(model_path, map_location="cpu")
-    design_details = {"trainer": 'MaPLe',
-                      "vision_depth": 0,
-                      "language_depth": 0, "vision_ctx": 0,
-                      "language_ctx": 0,
-                      "maple_length": cfg.TRAINER.MAPLE.N_CTX}
-    model = clip.build_model(state_dict or model.state_dict(), design_details)
-
+    if not zero_shot_model:
+        design_details = {
+            "trainer": 'MaPLe',
+            # vision과 language를 동일하게 (원래 코드처럼)
+            "vision_depth": cfg.TRAINER.MAPLE.PROMPT_DEPTH,
+            "language_depth": cfg.TRAINER.MAPLE.PROMPT_DEPTH,
+            "vision_ctx": cfg.TRAINER.MAPLE.N_CTX,
+            "language_ctx": cfg.TRAINER.MAPLE.N_CTX,
+            "maple_length": cfg.TRAINER.MAPLE.N_CTX
+        }
+        model = clip.build_model(state_dict or model.state_dict(), design_details)
+    else:
+        # Return original CLIP model for generating frozen VL features
+        design_details = {"trainer": 'MaPLe',
+                          "vision_depth": 0,
+                          "language_depth": 0, "vision_ctx": 0,
+                          "language_ctx": 0}
+        model = clip.build_model(state_dict or model.state_dict(), design_details)
+        return model
     return model
-
 
 class TextEncoder(nn.Module):
     def __init__(self, clip_model):
@@ -52,7 +62,7 @@ class TextEncoder(nn.Module):
     def forward(self, prompts, tokenized_prompts, compound_prompts_deeper_text):
         x = prompts + self.positional_embedding.type(self.dtype)
         x = x.permute(1, 0, 2)  # NLD -> LND
-        # Pass as the list, as nn.sequential cannot process multiple arguments in the forward pass
+        # Pass as the list, as nn.Sequential cannot process multiple arguments in the forward pass
         combined = [x, compound_prompts_deeper_text, 0]  # third argument is the counter which denotes depth of prompt
         outputs = self.transformer(combined)
         x = outputs[0]  # extract the x back from here
@@ -65,6 +75,55 @@ class TextEncoder(nn.Module):
 
         return x
 
+class MultiClassFocalLoss(nn.Module):
+    def __init__(self, alpha=None, gamma=2, reduction='mean'):
+        """
+        다중 클래스 Focal Loss.
+
+        Args:
+            alpha (Tensor or list, optional): 각 클래스에 대한 가중치. 클래스 불균형을 보완하기 위해 사용.
+                                              리스트나 텐서 형태로 각 클래스에 대한 가중치를 제공.
+            gamma (float): Focusing parameter.
+            reduction (str): 'none' | 'mean' | 'sum'.
+        """
+        super(MultiClassFocalLoss, self).__init__()
+        if isinstance(alpha, list):
+            self.alpha = torch.tensor(alpha, dtype=torch.float32)
+        elif isinstance(alpha, torch.Tensor):
+            self.alpha = alpha
+        elif alpha is None:
+            self.alpha = None
+        else:
+            raise TypeError('alpha must be None, list, or torch.Tensor')
+        
+        self.gamma = gamma
+        self.reduction = reduction
+
+    def forward(self, inputs, targets):
+        """
+        Args:
+            inputs: 모델의 출력 logits, shape (batch_size, num_classes)
+            targets: 실제 레이블, shape (batch_size)
+        Returns:
+            Focal Loss 값
+        """
+        if self.alpha is not None:
+            if self.alpha.device != inputs.device:
+                self.alpha = self.alpha.to(inputs.device)
+            alpha = self.alpha[targets]  # 각 샘플의 클래스에 해당하는 alpha
+        else:
+            alpha = 1.0
+
+        ce_loss = F.cross_entropy(inputs, targets, reduction='none')
+        pt = torch.exp(-ce_loss)  # 모델이 정답을 맞출 확률
+        focal_loss = alpha * ((1 - pt) ** self.gamma) * ce_loss
+
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        else:
+            return focal_loss
 
 class MultiModalPromptLearner(nn.Module):
     def __init__(self, cfg, classnames, clip_model):
@@ -114,7 +173,7 @@ class MultiModalPromptLearner(nn.Module):
             nn.init.normal_(single_para, std=0.02)
         # Also make corresponding projection layers, for each prompt
         single_layer = nn.Linear(ctx_dim, 768)
-        self.compound_prompt_projections = _get_clones(single_layer, self.compound_prompts_depth - 1)
+        self.compound_prompt_projections = self._get_clones(single_layer, self.compound_prompts_depth - 1)
 
         classnames = [name.replace("_", " ") for name in classnames]
         name_lens = [len(_tokenizer.encode(name)) for name in classnames]
@@ -134,6 +193,9 @@ class MultiModalPromptLearner(nn.Module):
         self.n_ctx = n_ctx
         self.tokenized_prompts = tokenized_prompts  # torch.Tensor
         self.name_lens = name_lens
+
+    def _get_clones(self, module, N):
+        return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
 
     def construct_prompts(self, ctx, prefix, suffix, label=None):
         # dim0 is either batch_size (during training) or n_cls (during testing)
@@ -175,9 +237,8 @@ class MultiModalPromptLearner(nn.Module):
         # We will project the textual prompts from 512 to 768
         return prompts, self.proj(self.ctx), self.compound_prompts_text, visual_deep_prompts   # pass here original, as for visual 768 is required
 
-
 class CustomCLIP(nn.Module):
-    def __init__(self, cfg, classnames, clip_model):
+    def __init__(self, cfg, classnames, clip_model, per_class=None):
         super().__init__()
         self.prompt_learner = MultiModalPromptLearner(cfg, classnames, clip_model)
         self.tokenized_prompts = self.prompt_learner.tokenized_prompts
@@ -185,6 +246,27 @@ class CustomCLIP(nn.Module):
         self.text_encoder = TextEncoder(clip_model)
         self.logit_scale = clip_model.logit_scale
         self.dtype = clip_model.dtype
+
+        self.n_cls = len(classnames)
+        self.total_epochs = cfg.OPTIM.MAX_EPOCH
+        
+        # Focal Loss 초기화
+        if per_class is not None:
+            if isinstance(per_class, str):
+                # 문자열로 제공된 경우, 리스트로 변환
+                per_class = list(map(int, per_class.strip("[]").split(',')))
+            elif isinstance(per_class, list):
+                pass  # 이미 리스트인 경우
+            else:
+                raise TypeError("per_class must be a string or a list of integers.")
+            
+            # alpha 계산: 클래스의 샘플 수에 반비례
+            total_samples = sum(per_class)
+            alpha = [total_samples / (self.n_cls * count) for count in per_class]
+        else:
+            alpha = None  # alpha를 사용하지 않는 경우
+        
+        self.criterion = MultiClassFocalLoss(alpha=alpha, gamma=2, reduction='mean')
 
     def forward(self, image, label=None):
         tokenized_prompts = self.tokenized_prompts
@@ -199,14 +281,12 @@ class CustomCLIP(nn.Module):
         logits = logit_scale * image_features @ text_features.t()
 
         if self.prompt_learner.training:
-            return F.cross_entropy(logits, label)
-
-        return logits
-
-
-def _get_clones(module, N):
-    return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
-
+            # Focal Loss 적용
+            loss_ce = self.criterion(logits, label)
+            
+            return loss_ce
+        else:
+            return logits
 
 @TRAINER_REGISTRY.register()
 class MaPLe(TrainerX):
@@ -225,7 +305,14 @@ class MaPLe(TrainerX):
             clip_model.float()
 
         print("Building custom CLIP")
-        self.model = CustomCLIP(cfg, classnames, clip_model)
+        # PER_CLASS 정의
+        PER_CLASS = [
+            16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,  # 앞 18개 클래스
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1  # 뒤 19개 클래스
+        ]
+
+        # CustomCLIP 초기화
+        self.model = CustomCLIP(cfg, classnames, clip_model, per_class=PER_CLASS)
 
         print("Turning off gradients in both the image and the text encoder")
         name_to_update = "prompt_learner"
@@ -237,6 +324,9 @@ class MaPLe(TrainerX):
                     param.requires_grad_(True)
                 else:
                     param.requires_grad_(False)
+            else:
+                if "ZS_image_encoder" in name:
+                    param.requires_grad_(False)
 
         # Double check
         enabled = set()
@@ -244,7 +334,7 @@ class MaPLe(TrainerX):
             if param.requires_grad:
                 enabled.add(name)
         print(f"Parameters to be updated: {enabled}")
-
+        print(f"Parameters count: {len(enabled)}")
         if cfg.MODEL.INIT_WEIGHTS:
             load_pretrained_weights(self.model, cfg.MODEL.INIT_WEIGHTS)
 

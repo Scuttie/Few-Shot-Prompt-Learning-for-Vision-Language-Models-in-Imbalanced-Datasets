@@ -1,0 +1,314 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+        "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+<head>
+  <meta http-equiv="content-type" content="text/html; charset=utf-8" />
+  <title>FGVC-Aircraft</title>
+  <style type="text/css">
+  html {
+  font-family: Helvetica, Arial, Sans ;
+  }
+  body {
+  max-width: 60em ;
+  margin: 0 auto ;
+  padding: 1em ;
+  }
+  pre {
+  background-color: #fafafa ;
+  border: 1px solid #ccc ;
+  padding: 1em ;
+  }
+  p {
+  line-height: 1.4em ;
+  }
+  </style>
+</head>
+<body>
+
+<h1>FGVC-Aircraft Benchmark</h1>
+
+<p><strong>Fine-Grained Visual Classification of Aircraft (FGVC-Aircraft)</strong> is
+a benchmark dataset for the fine grained visual categorization of
+aircraft.</p>
+
+<ul>
+<li><a href="archives/fgvc-aircraft-2013b.tar.gz">Data, annotations, and evaluation code</a> [2.75 GB | <a href="archives/fgvc-aircraft-2013b.html">MD5 Sum</a>].</li>
+<li><a href="archives/fgvc-aircraft-2013b-annotations.tar.gz">Annotations and evaluation code only</a> [375 KB | <a href="archives/fgvc-aircraft-2013b-annotations.html">MD5 Sum</a>].</li>
+<li>Project <a href="http://www.robots.ox.ac.uk/~vgg/data/fgvc-aircraft/">home page</a>.</li>
+<li>This data was used as part of the fine-grained recognition challenge
+<a href="https://sites.google.com/site/fgcomp2013/">FGComp 2013</a> which ran
+jointly with the ImageNet Challenge 2013
+(<a href="https://sites.google.com/site/fgcomp2013/results">results</a>). Please
+note that <em>the evaluation code provided here may differ</em> from the
+one used in the challenge.</li>
+</ul>
+
+<p>Please use the following citation when referring to this dataset:</p>
+
+<p><em>Fine-Grained Visual Classification of Aircraft</em>, S. Maji, J. Kannala,
+E. Rahtu, M. Blaschko, A. Vedaldi, <a href="http://arxiv.org/abs/1306.5151">arXiv.org</a>, 2013</p>
+
+<pre><code>@techreport{maji13fine-grained,
+   title         = {Fine-Grained Visual Classification of Aircraft},
+   author        = {S. Maji and J. Kannala and E. Rahtu
+                    and M. Blaschko and A. Vedaldi},
+   year          = {2013},
+   archivePrefix = {arXiv},
+   eprint        = {1306.5151},
+   primaryClass  = "cs-cv",
+}
+</code></pre>
+
+<p>For further information see:</p>
+
+<ul>
+<li><a href="#quick">Quick start</a>
+<ul>
+<li><a href="#aircraft">About aircraft</a></li>
+</ul></li>
+<li><a href="#format">Data and annotation format</a></li>
+<li><a href="#evaluation">Evaluation</a>
+<ul>
+<li><a href="#metric">Evaluation metric</a></li>
+<li><a href="#code">Evaluation code</a></li>
+</ul></li>
+<li><a href="#ack">Ackwonledgments</a></li>
+<li><a href="#release">Release notes</a></li>
+</ul>
+
+<p><strong>Note.</strong> This data has been used as part of the <em>ImageNet FGVC
+challenge in conjuction with the International Conference on Computer
+Vision (ICCV) 2013</em>. Test labels were not made available until the
+challenge due to the ImageNet challenge policy. They have now been
+released as part of the download above. If you arelady downloaded the
+iamge archive and want to have access to the test labels, simply
+download the annotations archive again.</p>
+
+<p><strong>Note.</strong> Images in the benchmark are generously made available <strong>for
+non-commercial research purposes only</strong> by a number of <em>airplane
+spotters</em>. Please note that the original authors retain the copyright
+of the respective photographs and should be contacted for any other
+use. For further details see the <a href="#ack">copyright note</a> below.</p>
+
+<h1><a id=quick></a> Quick start</h1>
+
+<p>The dataset contains 10,200 images of aircraft, with 100 images for
+each of 102 different aircraft model variants, most of which are
+airplanes. The (main) aircraft in each image is annotated with a tight
+bounding box and a hierarchical airplane model label.</p>
+
+<p>Aircraft models are organized in a four-levels hierarchy. The four
+levels, from finer to coarser, are:</p>
+
+<ul>
+<li><strong>Model</strong>, e.g. <em>Boeing 737-76J</em>. Since certain models are nearly visually
+indistinguishable, this level is not used in the evaluation.</li>
+<li><strong>Variant</strong>, e.g. <em>Boeing 737-700</em>. A variant collapses all the
+models that are visually indistinguishable into one class. The
+dataset comprises 102 different variants.</li>
+<li><strong>Family</strong>, e.g. <em>Boeing 737</em>. The dataset comprises 70 different
+families.</li>
+<li><strong>Manufacturer</strong>, e.g. <em>Boeing</em>. The dataset comprises 41
+different manufacturers.</li>
+</ul>
+
+<p>The data is divided into three equally-sized <em>training</em>, <em>validation</em>
+and <em>test</em> subsets. The first two sets can be used for development,
+and the latter should be used for final evaluation only. The format of
+the data is described <a href="#format">next</a>.</p>
+
+<p>The performance of a fine-grained classification algorithm is
+evaluated in term of average class-prediction accuracy. This is
+defined as the average of the diagonal of the row-normalized confusion
+matrix, as used for example in Caltech-101. Three classification
+challenges are considered: variant, family, and manufacturer. An
+<a href="#software">evaluation script</a> in MATLAB is provided.</p>
+
+<h2><a href=aircraft></a> About aircraft</h2>
+
+<p>Aircraft, and in particular airplanes, are alternative to objects
+typically considered for fine-grained categorization such as birds and
+pets. There are several aspects that make aircraft model recognition
+particularly interesting. Firstly, aircraft designs span a hundred
+years, including many thousand different models and hundreds of
+different makes and airlines. Secondly, aircraft designs vary
+significantly depending on the size (from home-built to large
+carriers), destination (private, civil, military), purpose
+(transporter, carrier, training, sport, fighter, etc.), propulsion
+(glider, propeller, jet), and many other factors including
+technology. One particular axis of variation, which is is not shared
+with categories such as animals, is the fact that the <em>structure</em> of
+the aircraft changes with their design (number of wings,
+undercarriages, wheel per undercarriage, engines, etc.). Thirdly, any
+given aircraft model can be re-purposed or used by different
+companies, which causes further variations in appearance
+(livery). These, depending on the identification task, may be consider
+as noise or as useful information to be extracted. Finally, aircraft
+are largely rigid objects, which simplifies certain aspects of their
+modeling (compared to highly-deformable animals such as cats),
+allowing one to focus on the core aspects of the fine-grained
+recognition problem.</p>
+
+<h1><a id=format></a> Data format</h1>
+
+<p>The directory <code>data</code> contains the images as well as a number of text
+files with the data annotations.</p>
+
+<p>Images are contained in the <code>data/images</code> sub-directory. They are in
+JPEG format and have a name composed of seven digits and the <code>.jpg</code>
+suffix (e.g. <code>data/images/1187707.jpg</code>). The image resolution is about
+1-2MP. Each image has at the bottom a banner 20 pixels high containing
+<a href="#ack">copyright</a> information. Please make sure to remove this banner
+when using the images to train and evaluate algorithms.</p>
+
+<p>The annotations come in a number of text files. Each line of these
+files contains an image name optionally followed by an image
+annotation, either a textual label or a sequence of numbers.</p>
+
+<p><code>data/images_train.txt</code> contains the list of training images:</p>
+
+<pre>
+0787226
+1481091
+1548899
+0674300
+...
+</pre>
+
+<p>Similar files <code>data/images_val.txt</code> and <code>data/images_test.txt</code> contain the list
+of validation and test images.</p>
+
+<p><code>data/images_variant_train.txt</code>, <code>data/images_family_train.txt</code>, and
+<code>data/images_manufacturer_train.txt</code> contain the list of training
+images annotated with the model variant, family, and manufacturer
+names respectively:</p>
+
+<pre>
+0787226 Abingdon Spherical Free Balloon
+1481091 AEG Wagner Eule
+1548899 Aeris Naviter AN-2 Enara
+0674300 Aeritalia F-104S Starfighter
+...
+</pre>
+
+<p>Similar files are provided for the validation and test subsets.</p>
+
+<p>Finally, <code>data/images_box.txt</code> contains the aircraft bounding
+boxes, one per image. The bounding box is specified by four numbers:
+<em>xmin</em>, <em>ymin</em>, <em>xmax</em> and <em>ymax</em>. The top-left pixel of an image has
+coordinate (1,1).</p>
+
+<h1><a id=evaluation></a> Evaluation</h1>
+
+<p>The performance of a classifier is measured in term of its average
+classification accuracy, as detailed next.</p>
+
+<h2><a id=metric></a> Evaluation metric</h2>
+
+<p>The output of a classification algorithm must be a list of triplets of
+the type (<em>image</em>,<em>label</em>,<em>score</em>), where</p>
+
+<ul>
+<li><em>image</em> is an image label, i.e. a seven-digit number,</li>
+<li><em>label</em> is an image label, i.e.. an aircraft model variant, family, or manufacturer, and</li>
+<li><em>score</em> is a real number expressing the belief in the judgment.</li>
+</ul>
+
+<p>When computing the classification accuracy, an image is assigned the
+label contained in its highest-scoring triplet. An image that has no
+triplets is considered unclassified and always count as a
+classification error (therefore it is better to guess at least one
+label for each image rather than leaving it unclassified).</p>
+
+<p>The quality of the predictions is measured in term of <em>average
+accuracy</em>, obtained as follows:</p>
+
+<ul>
+<li>The confusion matrix is square, with one row per class.</li>
+<li>Each element of the confusion matrix is the number of time aircraft
+of a given class (specified by the row) are classified as a second
+class (column). Ideally, the confusion matrix should be diagonal.</li>
+<li>The confusion matrix is row-normalized by the number of images of
+the corresponding aircraft class (each row therefore sums to one if
+there are no unclassified images).</li>
+<li>The average accuracy is computed as the average of the diagonal of
+the confusion matrix.</li>
+</ul>
+
+<p>There are three challenges: classifying the aircraft variant, family, and manufacturer.</p>
+
+<h2><a id=code></a> Evaluation code</h2>
+
+<p>The evaluation protocol has been implemented in the MATLAB m-file
+<code>evaluation.m</code>. This function takes the path to the <code>data</code> folder, a
+composite name indicating the evaluation subset and challenge
+(e.g. <code>'manufacturer_test'</code> or <code>'family_val'</code>), and the list of
+triplets, and returns the confusion matrix. For example</p>
+
+<pre>
+images = {'2074164'} ;
+labels = {'McDonnell Douglas MD-90-30'} ;
+scores = 1 ;
+confusion = evaluate('/path/fgcv-aircraft/data', 'test', images, labels, scores) ;
+accuracy = mean(diag(confusion)) ;
+</pre>
+
+<p>evaluates a classifier output containing exactly one triplet (image,
+label, score), where the image is <code>'2074164'</code>, its predicted class is
+<code>'McDonnell Douglas MD-90-30'</code>, and the score of the prediction is
+<code>1</code>. In practice, a complete set of predictions (one for each
+image-class pair) is usually evaluated.</p>
+
+<p>See the builtin help of the <code>evaluation</code> MATLAB functions for further
+practical details. See also <code>example_evaluation.m</code> for examples on how
+to use this function.</p>
+
+<h1><a id=ack></a> Acknowledgments</h1>
+
+<p>The creation of this dataset started during the <em>Johns Hopkins CLSP
+Summer Workshop 2012</em>
+<a href="http://www.clsp.jhu.edu/workshops/archive/ws-12/groups/tduosn/">Towards a Detailed Understanding of Objects and Scenes in Natural Images</a>
+with, in alphabetical order, Matthew B. Blaschko, Ross B. Girshick,
+Juho Kannala, Iasonas Kokkinos, Siddharth Mahendran, Subhransu Maji,
+Sammy Mohamed, Esa Rahtu, Naomi Saphra, Karen Simonyan, Ben Taskar,
+Andrea Vedaldi, and David Weiss.</p>
+
+<p>The CLSP workshop was supported by the National Science Foundation via
+Grant No 1005411, the Office of the Director of National Intelligence
+via the JHU Human Language Technology Center of Excellence; and Google
+Inc.</p>
+
+<p>A special thanks goes to Pekka Rantalankila for helping with the
+creation of the airplane hieararchy.</p>
+
+<p>Many thanks to the photographers that kindly made available their
+images for research purposes. Each photographer is listed below, along
+with a link to his/her <a href="http://airliners.net">airlners.net</a> page:</p>
+
+<ul>
+<li><a href="http://www.airliners.net/profile/dendrobatid">Mick Bajcar</a></li>
+<li><a href="http://www.airliners.net/profile/aldobid">Aldo Bidini</a></li>
+<li><a href="http://www.airliners.net/profile/minoeke">Wim Callaert</a></li>
+<li><a href="http://www.airliners.net/profile/tommypilot">Tommy Desmet</a></li>
+<li><a href="http://www.airliners.net/profile/snorre">Thomas Posch</a></li>
+<li><a href="http://www.airliners.net/profile/lemonkitty">James Richard Covington</a></li>
+<li><a href="http://www.airliners.net/profile/stegi">Gerry Stegmeier</a></li>
+<li><a href="http://www.airliners.net/profile/aal151heavy">Ben Wang</a></li>
+<li><a href="http://www.airliners.net/profile/dazbo5">Darren Wilson</a></li>
+<li><a href="http://www.airliners.net/profile/fly-k">Konstantin von Wedelstaedt</a></li>
+</ul>
+
+<p>Please note that the images are made available <strong>exclusively for
+non-commercial research purposes</strong>. The original authors retain the
+copyright on the respective pictures and should be contacted for any
+other usage of them.</p>
+
+<h1><a id=release></a> Release notes</h1>
+
+<ul>
+<li><em>FGVC-Aircraft 2013b</em> - The same as 2013a, but with test annotations included.</li>
+<li><em>FGVC-Aircraft 2013a</em> - First public release of the data.</li>
+</ul>
+
+</body>
+</html>
