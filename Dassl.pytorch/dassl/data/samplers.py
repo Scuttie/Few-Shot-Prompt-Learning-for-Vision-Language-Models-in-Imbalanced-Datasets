@@ -1,8 +1,9 @@
 import copy
 import numpy as np
 import random
-from collections import defaultdict
-from torch.utils.data.sampler import Sampler, RandomSampler, SequentialSampler
+from collections import defaultdict, Counter
+import torch
+from torch.utils.data.sampler import Sampler, RandomSampler, SequentialSampler, WeightedRandomSampler
 
 
 class RandomDomainSampler(Sampler):
@@ -177,6 +178,39 @@ class RandomClassSampler(Sampler):
     def __len__(self):
         return self.length
 
+class WeightedClassSampler(Sampler):
+    """
+    각 클래스(label)가 동일한 확률로 선택되도록 가중치를 설정
+    """
+    def __init__(self, data_source, replacement=True, num_samples=None):
+        self.data_source = data_source
+        self.replacement = replacement
+        if num_samples is None:
+            num_samples = len(self.data_source)
+        self.num_samples = num_samples
+
+        # label 별로 몇 개가 있는지 세기
+        label_count = Counter(item.label for item in data_source)
+
+        # 1 / label_count[item.label] 로 가중치 부여
+        self.weights = [
+            1.0 / label_count[item.label]
+            for item in data_source
+        ]
+
+        # torch의 WeightedRandomSampler를 내부적으로 사용
+        self.w_sampler = WeightedRandomSampler(
+            weights=self.weights,
+            num_samples=self.num_samples,
+            replacement=self.replacement
+        )
+
+    def __iter__(self):
+        return iter(self.w_sampler)
+
+    def __len__(self):
+        return self.num_samples
+
 
 def build_sampler(
     sampler_type,
@@ -184,7 +218,10 @@ def build_sampler(
     data_source=None,
     batch_size=32,
     n_domain=0,
-    n_ins=16
+    n_ins=16,
+    # WeightedClassSampler용 추가 인자
+    replacement=True,
+    num_samples=None
 ):
     if sampler_type == "RandomSampler":
         return RandomSampler(data_source)
@@ -200,6 +237,13 @@ def build_sampler(
 
     elif sampler_type == "RandomClassSampler":
         return RandomClassSampler(data_source, batch_size, n_ins)
+
+    elif sampler_type == "WeightedClassSampler":
+        return WeightedClassSampler(
+            data_source=data_source,
+            replacement=replacement,
+            num_samples=num_samples
+        )
 
     else:
         raise ValueError("Unknown sampler type: {}".format(sampler_type))
