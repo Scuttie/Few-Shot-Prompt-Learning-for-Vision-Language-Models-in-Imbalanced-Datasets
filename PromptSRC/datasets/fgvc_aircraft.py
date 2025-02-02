@@ -1,11 +1,10 @@
 import os
 import pickle
 import random
+import math
 from dassl.data.datasets import DATASET_REGISTRY, Datum, DatasetBase
 from dassl.utils import mkdir_if_missing
-
-from .oxford_pets import OxfordPets
-
+from .oxford_pets import OxfordPets  # subsample_classes 용
 
 @DATASET_REGISTRY.register()
 class FGVCAircraft(DatasetBase):
@@ -18,61 +17,82 @@ class FGVCAircraft(DatasetBase):
         self.split_fewshot_dir = os.path.join(self.dataset_dir, "split_fewshot")
         mkdir_if_missing(self.split_fewshot_dir)
 
+        # -------------------------
+        # 1) 전체 클래스 불러오기
+        # -------------------------
         classnames = []
         with open(os.path.join(self.dataset_dir, "variants.txt"), "r") as f:
             lines = f.readlines()
             for line in lines:
                 classnames.append(line.strip())
+
+        # cname2lab: 원본 클래스명 -> 원본 라벨
         cname2lab = {c: i for i, c in enumerate(classnames)}
 
+        # lab2cname_full: 원본 라벨 -> 클래스명
+        self.lab2cname_full = {i: c for i, c in enumerate(classnames)}
+
+        # -------------------------
+        # 2) train/val/test 읽기
+        # -------------------------
         train = self.read_data(cname2lab, "images_variant_train.txt")
         val = self.read_data(cname2lab, "images_variant_val.txt")
         test = self.read_data(cname2lab, "images_variant_test.txt")
 
-        num_shots = cfg.DATASET.NUM_SHOTS           # int
-        per_class_shots = cfg.DATASET.PER_CLASS_SHOTS  # list
+        num_shots = cfg.DATASET.NUM_SHOTS
+        per_class_shots = cfg.DATASET.PER_CLASS_SHOTS
         seed = cfg.SEED
+        random.seed(seed)
 
-        if len(per_class_shots) > 0:
+        # -------------------------
+        # 3) Few-shot 처리
+        # -------------------------
+        if num_shots > 0:
+            # uniform few-shot
             preprocessed = os.path.join(
-                self.split_fewshot_dir, f"per_class_shots-seed_{seed}.pkl"
+                self.split_fewshot_dir, f"shot_{num_shots}-seed_{seed}.pkl"
             )
-
             if os.path.exists(preprocessed):
-                print(f"[FGVCAircraft] Loading per-class few-shot data from {preprocessed}")
+                print(f"[FGVCAircraft] Loading few-shot data from {preprocessed}")
                 with open(preprocessed, "rb") as file:
                     data = pickle.load(file)
                     train, val = data["train"], data["val"]
             else:
-                val_shots_list = [min(s, 4) for s in per_class_shots]
+                train = self.generate_fewshot_dataset(train, num_shots=num_shots)
+                val = self.generate_fewshot_dataset(val, num_shots=min(num_shots, 4))
+                data = {"train": train, "val": val}
+                print(f"[FGVCAircraft] Saving few-shot data to {preprocessed}")
+                with open(preprocessed, "wb") as file:
+                    pickle.dump(data, file, protocol=pickle.HIGHEST_PROTOCOL)
 
+        elif num_shots < 0:
+            # per-class few-shot
+            if not per_class_shots:
+                print("[FGVCAircraft] num_shots < 0 이지만 per_class_shots가 비어있어 few-shot 적용안함")
+            else:
+                preprocessed = os.path.join(
+                    self.split_fewshot_dir, f"per_class_shots-seed_{seed}.pkl"
+                )
+                # if os.path.exists(preprocessed):
+                #     print(f"[FGVCAircraft] Loading per-class few-shot data from {preprocessed}")
+                #     with open(preprocessed, "rb") as file:
+                #         data = pickle.load(file)
+                #         train, val = data["train"], data["val"]
+                # else:
+                val_shots_list = [min(s, 4) for s in per_class_shots]
                 train = self.generate_per_class_fewshot_dataset(train, per_class_shots)
                 val = self.generate_per_class_fewshot_dataset(val, val_shots_list)
-
                 data = {"train": train, "val": val}
                 print(f"[FGVCAircraft] Saving per-class few-shot data to {preprocessed}")
                 with open(preprocessed, "wb") as file:
                     pickle.dump(data, file, protocol=pickle.HIGHEST_PROTOCOL)
-
         else:
-            if num_shots >= 1:
-                preprocessed = os.path.join(
-                    self.split_fewshot_dir, f"shot_{num_shots}-seed_{seed}.pkl"
-                )
+            # num_shots == 0 => 원본 그대로
+            pass
 
-                if os.path.exists(preprocessed):
-                    print(f"Loading preprocessed few-shot data from {preprocessed}")
-                    with open(preprocessed, "rb") as file:
-                        data = pickle.load(file)
-                        train, val = data["train"], data["val"]
-                else:
-                    train = self.generate_fewshot_dataset(train, num_shots=num_shots)
-                    val = self.generate_fewshot_dataset(val, num_shots=min(num_shots, 4))
-                    data = {"train": train, "val": val}
-                    print(f"Saving preprocessed few-shot data to {preprocessed}")
-                    with open(preprocessed, "wb") as file:
-                        pickle.dump(data, file, protocol=pickle.HIGHEST_PROTOCOL)
-
+        # -------------------------
+        # 4) 서브샘플링(base/new/all)
+        # -------------------------
         subsample = cfg.DATASET.SUBSAMPLE_CLASSES
         train, val, test = OxfordPets.subsample_classes(train, val, test, subsample=subsample)
 
@@ -81,7 +101,6 @@ class FGVCAircraft(DatasetBase):
     def read_data(self, cname2lab, split_file):
         filepath = os.path.join(self.dataset_dir, split_file)
         items = []
-
         with open(filepath, "r") as f:
             lines = f.readlines()
             for line in lines:
@@ -90,9 +109,13 @@ class FGVCAircraft(DatasetBase):
                 classname = " ".join(line[1:])
                 impath = os.path.join(self.image_dir, imname)
                 label = cname2lab[classname]
-                item = Datum(impath=impath, label=label, classname=classname)
-                items.append(item)
 
+                item = Datum(
+                    impath=impath,
+                    label=label,
+                    classname=classname
+                )
+                items.append(item)
         return items
 
     @staticmethod
