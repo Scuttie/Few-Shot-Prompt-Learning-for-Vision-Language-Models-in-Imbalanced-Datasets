@@ -19,7 +19,9 @@ def build_data_loader(
     n_ins=2,
     tfm=None,
     is_train=True,
-    dataset_wrapper=None
+    dataset_wrapper=None,
+    replacement=True,
+    num_samples=None
 ):
     # Build sampler
     sampler = build_sampler(
@@ -28,7 +30,9 @@ def build_data_loader(
         data_source=data_source,
         batch_size=batch_size,
         n_domain=n_domain,
-        n_ins=n_ins
+        n_ins=n_ins,
+        replacement=replacement,
+        num_samples=num_samples
     )
 
     if dataset_wrapper is None:
@@ -59,6 +63,12 @@ class DataManager:
     ):
         # Load dataset
         dataset = build_dataset(cfg)
+
+        if hasattr(dataset, 'lab2cname_full'):
+            self._lab2cname_all = dataset.lab2cname_full  # dict
+        else:
+            # 혹은 그냥 동일하게
+            self._lab2cname_all = dataset.lab2cname
 
         # Build transform
         if custom_tfm_train is None:
@@ -162,6 +172,10 @@ class DataManager:
     @property
     def lab2cname(self):
         return self._lab2cname
+
+    @property
+    def lab2cname_all(self):
+        return self._lab2cname_all
 
     def show_dataset_summary(self, cfg):
         dataset_name = cfg.DATASET.NAME
