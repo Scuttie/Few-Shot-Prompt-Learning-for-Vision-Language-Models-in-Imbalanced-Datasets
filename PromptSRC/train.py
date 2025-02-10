@@ -29,6 +29,11 @@ import trainers.zsclip
 import trainers.maple
 import trainers.independentVL
 import trainers.promptsrc
+import trainers.linear_probe
+
+from trainers.simclr_utils import SimCLRDataset, simclr_transform, simclr_collate_fn
+
+from torch.utils.data import DataLoader
 
 
 def print_args(args, cfg):
@@ -43,7 +48,6 @@ def print_args(args, cfg):
     print("** Config **")
     print("************")
     print(cfg)
-
 
 def reset_cfg(cfg, args):
     if args.root:
@@ -96,11 +100,14 @@ def extend_cfg(cfg):
     cfg.TRAINER.COOP.CTX_INIT = ""  # initialization words
     cfg.TRAINER.COOP.PREC = "fp16"  # fp16, fp32, amp
     cfg.TRAINER.COOP.CLASS_TOKEN_POSITION = "end"  # 'middle' or 'end' or 'front'
+    cfg.TRAINER.COOP.USE_FOCAL_LOSS = False
+    cfg.TRAINER.COOP.LOSS_TYPE = "ce"
 
     cfg.TRAINER.COCOOP = CN()
     cfg.TRAINER.COCOOP.N_CTX = 16  # number of context vectors
     cfg.TRAINER.COCOOP.CTX_INIT = ""  # initialization words
     cfg.TRAINER.COCOOP.PREC = "fp16"  # fp16, fp32, amp
+    cfg.TRAINER.COCOOP.USE_FOCAL_LOSS = False
 
     # Config for MaPLe
     cfg.TRAINER.MAPLE = CN()
@@ -109,6 +116,7 @@ def extend_cfg(cfg):
     cfg.TRAINER.MAPLE.PREC = "fp16"  # fp16, fp32, amp
     cfg.TRAINER.MAPLE.PROMPT_DEPTH = 9  # Max 12, minimum 0, for 1 it will act as shallow MaPLe (J=1)
     cfg.DATASET.SUBSAMPLE_CLASSES = "all"  # all, base or new
+    cfg.TRAINER.MAPLE.USE_FOCAL_LOSS = False
 
     # Config for PromptSRC
     cfg.TRAINER.PROMPTSRC = CN()
@@ -122,7 +130,11 @@ def extend_cfg(cfg):
     cfg.TRAINER.PROMPTSRC.IMAGE_LOSS_WEIGHT = 10
     cfg.TRAINER.PROMPTSRC.GPA_MEAN = 15
     cfg.TRAINER.PROMPTSRC.GPA_STD = 1
+    # 추가: 레이블 스코프 옵션("all" 또는 "default")
+    cfg.TRAINER.PROMPTSRC.LABEL_SCOPE = "default"
     cfg.DATASET.SUBSAMPLE_CLASSES = "all"  # all, base or new
+    cfg.TRAINER.PROMPTSRC.LOSS_TYPE = "ce"
+    cfg.TRAINER.PROMPTSRC.SIMCLR_ALPHA = 0.0
 
     # Config for independent Vision Language prompting (independent-vlp)
     cfg.TRAINER.IVLP = CN()
@@ -134,6 +146,19 @@ def extend_cfg(cfg):
     cfg.TRAINER.IVLP.PROMPT_DEPTH_VISION = 9  # Max 12, minimum 0, for 0 it will act as shallow IVLP prompting (J=1)
     cfg.TRAINER.IVLP.PROMPT_DEPTH_TEXT = 9  # Max 12, minimum 0, for 0 it will act as shallow IVLP prompting(J=1)
     cfg.DATASET.SUBSAMPLE_CLASSES = "all"  # all, base or new
+    cfg.TRAINER.IVLP.USE_FOCAL_LOSS = False
+    cfg.TRAINER.IVLP.SIMCLR_ALPHA = 0.0
+    cfg.TRAINER.IVLP.USE_MIXUP = True
+    cfg.TRAINER.IVLP.MIXUP_ALPHA = 1.0
+    cfg.TRAINER.IVLP.USE_KD = True
+    cfg.TRAINER.IVLP.KD_TEACHER_MODEL = "resnet50"
+    cfg.TRAINER.IVLP.KD_ALPHA = 1.0
+    cfg.TRAINER.IVLP.KD_T = 4.0
+    
+
+    cfg.TRAINER.LINEAR_PROBE = CN()
+    cfg.TRAINER.LINEAR_PROBE.LOSS_TYPE = "ce"  
+    cfg.TRAINER.LINEAR_PROBE.USE_BIAS = True
 
     if not hasattr(cfg.DATASET, "PER_CLASS_SHOTS"):
         cfg.DATASET.PER_CLASS_SHOTS = []
@@ -178,6 +203,39 @@ def main(args):
 
     trainer = build_trainer(cfg)
 
+    if cfg.TRAINER.PROMPTSRC.SIMCLR_ALPHA > 0:
+        print(">> SIMCLR_ALPHA > 0 => Overriding train_loader_x with a SimCLR DataLoader!")
+        # 이하 기존과 동일한 로직
+        base_data_list = trainer.dm.dataset.train_x
+
+        from torchvision.datasets.folder import default_loader
+        class MyBaseDataset(torch.utils.data.Dataset):
+            def __init__(self, datum_list):
+                self.datum_list = datum_list
+                self.loader = default_loader
+            def __len__(self):
+                return len(self.datum_list)
+            def __getitem__(self, idx):
+                d = self.datum_list[idx]
+                img = self.loader(d.impath)
+                return img, d.label
+
+        base_dataset = MyBaseDataset(base_data_list)
+        simclr_ds = SimCLRDataset(base_dataset, transform=simclr_transform)
+
+        from trainers.simclr_utils import simclr_collate_fn
+        simclr_loader = DataLoader(
+            simclr_ds,
+            batch_size=cfg.DATALOADER.TRAIN_X.BATCH_SIZE,
+            shuffle=True,
+            num_workers=cfg.DATALOADER.NUM_WORKERS,
+            drop_last=True,
+            collate_fn=simclr_collate_fn
+        )
+        trainer.dm.train_loader_x = simclr_loader
+
+
+
     if args.eval_only:
         trainer.load_model(args.model_dir, epoch=args.load_epoch)
         
@@ -195,6 +253,21 @@ def main(args):
 
     if not args.no_train:
         trainer.train()
+
+        print(">>> Evaluating on the test set right after training...")
+        y_true, y_pred = trainer.test(return_pred=True)
+
+        from sklearn.metrics import classification_report
+        print("\n===========================")
+        print("Classification Report")
+        print("===========================")
+        print(classification_report(y_true, y_pred))
+
+    # debug
+    first_batch = next(iter(trainer.dm.train_loader_x))
+    print("DEBUG batch keys:", first_batch.keys())
+    exit()
+
 
 
 if __name__ == "__main__":
