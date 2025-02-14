@@ -29,6 +29,7 @@ import trainers.zsclip
 import trainers.maple
 import trainers.independentVL
 import trainers.promptsrc
+import trainers.plip
 import trainers.linear_probe
 
 from trainers.simclr_utils import SimCLRDataset, simclr_transform, simclr_collate_fn
@@ -145,7 +146,6 @@ def extend_cfg(cfg):
     # If both variables below are set to 0, 0, will the config will degenerate to COOP model
     cfg.TRAINER.IVLP.PROMPT_DEPTH_VISION = 9  # Max 12, minimum 0, for 0 it will act as shallow IVLP prompting (J=1)
     cfg.TRAINER.IVLP.PROMPT_DEPTH_TEXT = 9  # Max 12, minimum 0, for 0 it will act as shallow IVLP prompting(J=1)
-    cfg.DATASET.SUBSAMPLE_CLASSES = "all"  # all, base or new
     cfg.TRAINER.IVLP.USE_FOCAL_LOSS = False
     cfg.TRAINER.IVLP.SIMCLR_ALPHA = 0.0
     cfg.TRAINER.IVLP.USE_MIXUP = True
@@ -154,12 +154,26 @@ def extend_cfg(cfg):
     cfg.TRAINER.IVLP.KD_TEACHER_MODEL = "resnet50"
     cfg.TRAINER.IVLP.KD_ALPHA = 1.0
     cfg.TRAINER.IVLP.KD_T = 4.0
-    
+    cfg.DATASET.SUBSAMPLE_CLASSES = "all"  # all, base or new
 
     cfg.TRAINER.LINEAR_PROBE = CN()
     cfg.TRAINER.LINEAR_PROBE.LOSS_TYPE = "ce"  
     cfg.TRAINER.LINEAR_PROBE.USE_BIAS = True
 
+    # Config for prompting with constraints of Lipschitz smoothness (PLIP)
+    cfg.TRAINER.PLIP = CN()
+    cfg.TRAINER.PLIP.N_CTX_VISION = 0  # number of context vectors at the vision branch
+    cfg.TRAINER.PLIP.N_CTX_TEXT = 4  # number of context vectors at the language branch
+    cfg.TRAINER.PLIP.CTX_INIT = "a photo of a"  # initialization words (only for language prompts)
+    cfg.TRAINER.PLIP.PREC = "fp16"  # fp16, fp32, amp
+    # If both variables below are set to 0, 0, will the config will degenerate to COOP model
+    cfg.TRAINER.PLIP.PROMPT_DEPTH_VISION = 0  # Max 12, minimum 0, for 0 it will act as shallow IVLP prompting (J=1)
+    cfg.TRAINER.PLIP.PROMPT_DEPTH_TEXT = 0  # Max 12, minimum 0, for 0 it will act as shallow IVLP prompting(J=1)
+    cfg.TRAINER.PLIP.REG_COEFF = 0.01  # regularization coefficient
+    cfg.TRAINER.PLIP.K = 1  # K-Lipschitz
+    cfg.TRAINER.PLIP.REG_TYPE = "grad"  # svd spectral_norm grad
+    cfg.DATASET.SUBSAMPLE_CLASSES = "all"  # all, base or new
+    
     if not hasattr(cfg.DATASET, "PER_CLASS_SHOTS"):
         cfg.DATASET.PER_CLASS_SHOTS = []
 
