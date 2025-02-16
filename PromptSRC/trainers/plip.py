@@ -15,10 +15,9 @@ from clip.simple_tokenizer import SimpleTokenizer as _Tokenizer
 
 _tokenizer = _Tokenizer()
 
-torch.backends.cuda.enable_flash_sdp(False)  # Flash Attention 비활성화
-torch.backends.cuda.enable_mem_efficient_sdp(False)
-torch.backends.cuda.enable_math_sdp(True)  # 일반적인 dot-product attention 사용
-
+# torch.backends.cuda.enable_flash_sdp(False)  # Flash Attention 비활성화
+# torch.backends.cuda.enable_mem_efficient_sdp(False)
+# torch.backends.cuda.enable_math_sdp(True)  # 일반적인 dot-product attention 사용
 
 def load_clip_to_cpu(cfg):
     backbone_name = cfg.MODEL.BACKBONE.NAME
@@ -277,7 +276,7 @@ class PLIP(TrainerX):
                             only_inputs=True
                 )[0]
                 gradient_norm = gradients.norm(2, dim=1)  # Compute L2 norm
-                penalty = torch.mean((gradient_norm - self.cfg.TRAINER.PLIP.K) ** 2)  # Penalize deviations from K
+                penalty = torch.mean((gradient_norm - self.cfg.TRAINER.PLIP.K ** 2) ** 2)  # Penalize deviations from K
             elif self.cfg.TRAINER.PLIP.REG_TYPE == "svd":
                 penalty = 0.0
             elif self.cfg.TRAINER.PLIP.REG_TYPE == "spectral_norm":

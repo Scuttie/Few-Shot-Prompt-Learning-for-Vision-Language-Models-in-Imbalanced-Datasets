@@ -30,9 +30,9 @@ import trainers.maple
 import trainers.independentVL
 import trainers.promptsrc
 import trainers.plip
-import trainers.linear_probe
+# import trainers.linear_probe
 
-from trainers.simclr_utils import SimCLRDataset, simclr_transform, simclr_collate_fn
+# from trainers.simclr_utils import SimCLRDataset, simclr_transform, simclr_collate_fn
 
 from torch.utils.data import DataLoader
 
@@ -80,6 +80,9 @@ def reset_cfg(cfg, args):
 
     if args.head:
         cfg.MODEL.HEAD.NAME = args.head
+
+    if args.per_class_shots:
+        cfg.DATASET.PER_CLASS_SHOTS = args.per_class_shots
 
 
 def extend_cfg(cfg):
@@ -217,39 +220,6 @@ def main(args):
 
     trainer = build_trainer(cfg)
 
-    if cfg.TRAINER.PROMPTSRC.SIMCLR_ALPHA > 0:
-        print(">> SIMCLR_ALPHA > 0 => Overriding train_loader_x with a SimCLR DataLoader!")
-        # 이하 기존과 동일한 로직
-        base_data_list = trainer.dm.dataset.train_x
-
-        from torchvision.datasets.folder import default_loader
-        class MyBaseDataset(torch.utils.data.Dataset):
-            def __init__(self, datum_list):
-                self.datum_list = datum_list
-                self.loader = default_loader
-            def __len__(self):
-                return len(self.datum_list)
-            def __getitem__(self, idx):
-                d = self.datum_list[idx]
-                img = self.loader(d.impath)
-                return img, d.label
-
-        base_dataset = MyBaseDataset(base_data_list)
-        simclr_ds = SimCLRDataset(base_dataset, transform=simclr_transform)
-
-        from trainers.simclr_utils import simclr_collate_fn
-        simclr_loader = DataLoader(
-            simclr_ds,
-            batch_size=cfg.DATALOADER.TRAIN_X.BATCH_SIZE,
-            shuffle=True,
-            num_workers=cfg.DATALOADER.NUM_WORKERS,
-            drop_last=True,
-            collate_fn=simclr_collate_fn
-        )
-        trainer.dm.train_loader_x = simclr_loader
-
-
-
     if args.eval_only:
         trainer.load_model(args.model_dir, epoch=args.load_epoch)
         
@@ -331,11 +301,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--no-train", action="store_true", help="do not call trainer.train()"
     )
+    parser.add_argument('--per_class_shots', type=int, default=[], nargs='+', help='List of shots per class')    
     parser.add_argument(
         "opts",
         default=None,
         nargs=argparse.REMAINDER,
         help="modify config options using the command-line",
-    )
+    )    
     args = parser.parse_args()
     main(args)
