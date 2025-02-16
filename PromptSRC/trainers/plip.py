@@ -276,7 +276,7 @@ class PLIP(TrainerX):
                             only_inputs=True
                 )[0]
                 gradient_norm = gradients.norm(2, dim=1)  # Compute L2 norm
-                penalty = torch.mean((gradient_norm - self.cfg.TRAINER.PLIP.K ** 2) ** 2)  # Penalize deviations from K
+                penalty = torch.mean((gradient_norm - self.cfg.TRAINER.PLIP.K) ** 2)  # Penalize deviations from K
             elif self.cfg.TRAINER.PLIP.REG_TYPE == "svd":
                 penalty = 0.0
             elif self.cfg.TRAINER.PLIP.REG_TYPE == "spectral_norm":
