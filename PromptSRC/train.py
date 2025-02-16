@@ -192,7 +192,7 @@ def main(args):
     dataset_name_to_basecount = {
         "dtd": 24,
         "oxford_pets": 19,
-        "oxford_flowers": 50,
+        "oxford_flowers": 51,
         "fgvc_aircraft": 50,
         "caltech101": 51,
         "food101": 51,
