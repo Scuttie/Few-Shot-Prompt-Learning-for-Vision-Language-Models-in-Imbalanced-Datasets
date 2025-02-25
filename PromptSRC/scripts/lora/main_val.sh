@@ -21,21 +21,18 @@ TRAINER=LoRA
 
 # DATASETS="eurosat sun397"
 # DATASETS="oxford_pets dtd oxford_flowers"
-# DATASETS="caltech101 dtd stanford_cars"
+# DATASETS="caltech101 dtd stanford_cars food101"
 # DATASETS="fgvc_aircraft"
-DATASETS="imagenet"
+DATASETS="ucf101"
 
 
 # python main.py --root_path /shared/s2/lab01/dataset --dataset fgvc --seed 1
-
 CFG=vit_b16_ep50
-# NCTX=16  # number of context tokens
-# REG_TYPE=grad # svd spectral_norm grad
 SEED=1
 SHOTS=16  # number of shots (1, 2, 4, 8, 16)
-# REG_COEFF=10.0
 SAMPLER=RandomSampler # WeightedClassSampler RandomSampler
-# K=1
+ENCODER=both # both vision text
+
 
 for DATASET in ${DATASETS}; do
     for SEED in 1; do
@@ -49,7 +46,8 @@ for DATASET in ${DATASETS}; do
             --config-file configs/trainers/${TRAINER}/${CFG}.yaml \
             --output-dir ${DIR} \
             DATASET.NUM_SHOTS ${SHOTS} \
-            DATALOADER.TRAIN_X.SAMPLER ${SAMPLER}
+            DATALOADER.TRAIN_X.SAMPLER ${SAMPLER} \
+            TRAINER.LORA.ENCODER ${ENCODER}
     done
 done
 
