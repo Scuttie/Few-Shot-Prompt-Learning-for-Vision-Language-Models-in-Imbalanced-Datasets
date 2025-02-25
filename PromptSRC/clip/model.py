@@ -337,6 +337,9 @@ class Transformer(nn.Module):
         super().__init__()
         self.width = width
         self.layers = layers
+        self.saved_features = []  # 피처 저장 공간
+        self.init = True
+
         # Implements respective encoder blocks for a given design choice
         current_trainer = design_details['trainer']
         if current_trainer == 'IVLP' or current_trainer == 'VPT':
@@ -355,9 +358,13 @@ class Transformer(nn.Module):
             assert current_trainer == 'CoOp' or current_trainer == 'CoCoOp'
             self.resblocks = nn.Sequential(*[ResidualAttentionBlock(width, heads, attn_mask) for _ in range(layers)])
 
-    def forward(self, x: torch.Tensor):
-        return self.resblocks(x)
-
+    def forward(self, x: torch.Tensor):        
+        for i, block in enumerate(self.resblocks):
+            x = block(x)
+            if self.init:
+                self.saved_features.append(x.clone().detach())  # 각 블록의 출력 저장
+        self.init = False        
+        return x
 
 
 class VisionTransformer(nn.Module):
@@ -609,7 +616,6 @@ class CLIP(nn.Module):
         # x.shape = [batch_size, n_ctx, transformer.width]
         # take features from the eot embedding (eot_token is the highest number in each sequence)
         x = x[torch.arange(x.shape[0]), text.argmax(dim=-1)] @ self.text_projection
-
         return x
 
     def forward(self, image, text):
@@ -690,7 +696,7 @@ def build_model(state_dict: dict, design_details):
         if key in state_dict:
             del state_dict[key]
 
-    convert_weights(model)
+    # convert_weights(model)
     try:
         model.load_state_dict(state_dict)
     except:

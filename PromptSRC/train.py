@@ -31,6 +31,7 @@ import trainers.independentVL
 import trainers.promptsrc
 import trainers.plip
 import trainers.linear_probe
+import trainers.lora
 from trainers.simclr_utils import SimCLRDataset, simclr_transform, simclr_collate_fn
 
 from torch.utils.data import DataLoader
@@ -175,7 +176,21 @@ def extend_cfg(cfg):
     cfg.TRAINER.PLIP.K = 1  # K-Lipschitz
     cfg.TRAINER.PLIP.REG_TYPE = "grad"  # svd spectral_norm grad
     cfg.DATASET.SUBSAMPLE_CLASSES = "all"  # all, base or new
-    
+
+    cfg.TRAINER.LORA = CN()
+    cfg.TRAINER.LORA.N_CTX_VISION = 2  # number of context vectors at the vision branch
+    cfg.TRAINER.LORA.N_CTX_TEXT = 2  # number of context vectors at the language branch
+    cfg.TRAINER.LORA.CTX_INIT = "a photo of a"  # initialization words (only for language prompts)
+    cfg.TRAINER.LORA.PREC = "fp16"  # fp16, fp32, amp    
+    cfg.TRAINER.LORA.PROMPT_DEPTH_VISION = 9  # Max 12, minimum 0, for 0 it will act as shallow IVLP prompting (J=1)
+    cfg.TRAINER.LORA.PROMPT_DEPTH_TEXT = 9  # Max 12, minimum 0, for 0 it will act as shallow IVLP prompting(J=1)
+    cfg.TRAINER.LORA.ENCODER = "both" # ['text', 'vision', 'both']
+    cfg.TRAINER.LORA.POSITION = "all" # 'bottom', 'mid', 'up', 'half-up', 'half-bottom', 'all', 'top3' where to put the LoRA modules
+    cfg.TRAINER.LORA.PARAMS = ['q', 'k', 'v']
+    cfg.TRAINER.LORA.R = 2 # the rank of the low-rank matrices
+    cfg.TRAINER.LORA.ALPHA = 1 # scaling (see LoRA paper)
+    cfg.TRAINER.LORA.DROPOUT_RATE = 0.25 # dropout rate applied before the LoRA module
+
     if not hasattr(cfg.DATASET, "PER_CLASS_SHOTS"):
         cfg.DATASET.PER_CLASS_SHOTS = []
 

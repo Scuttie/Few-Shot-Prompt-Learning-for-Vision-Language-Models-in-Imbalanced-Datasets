@@ -6,7 +6,7 @@ OxfordPets/
 *.pth
 *.pth.tar*
 *.pt
-
+slurm_log/
 PromptSRC/output/
 
 *.tar
