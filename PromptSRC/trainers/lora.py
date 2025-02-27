@@ -220,8 +220,11 @@ class PromptLearner(nn.Module):
 
         tokenized_prompts = torch.cat([clip.tokenize(p) for p in prompts])
         # clip_model_temp = load_clip_to_cpu(cfg, True).type(dtype)
+        clip_model_temp_image = load_clip_to_cpu(cfg, True)
         with torch.no_grad():
             embedding = clip_model.token_embedding(tokenized_prompts).type(dtype).cuda()
+            self.ZS_image_encoder = clip_model_temp_image.visual
+        self.fixed_embeddings = embedding.clone().detach().mean(dim=1)
     
         self.n_cls = n_cls
         self.n_ctx = n_ctx
@@ -256,6 +259,25 @@ class CustomCLIP(nn.Module):
 
         logit_scale = self.logit_scale.exp()
         logits = logit_scale * image_features @ text_features.t()
+
+        if self.prompt_learner.training:
+            fixed_embeddings = self.prompt_learner.fixed_embeddings
+            fixed_embeddings = fixed_embeddings / fixed_embeddings.norm(dim=-1, keepdim=True)
+            # print("fixed_embeddings:", fixed_embeddings.shape)
+            with torch.no_grad():
+                zero_shot_features = self.prompt_learner.ZS_image_encoder(image.type(self.dtype))
+                zero_shot_features = zero_shot_features / zero_shot_features.norm(dim=-1, keepdim=True)
+                zero_shot_logits = logit_scale * zero_shot_features.cuda() @ fixed_embeddings.cuda().t()
+
+            return (
+                logits,
+                text_features,
+                fixed_embeddings,
+                zero_shot_features,
+                image_features,
+                zero_shot_logits
+            )
+
 
         return logits
 
@@ -310,8 +332,35 @@ class LoRA(TrainerX):
     def forward_backward(self, batch):
         image, label = self.parse_batch_train(batch)
         
-        output = self.model(image)
+        # output = self.model(image)
+        output, normalized_text_features, zs_clip_text_embeddings, zs_image_embedd, image_ft, zero_shot_logits = self.model(image)
+
         loss = F.cross_entropy(output, label)
+
+        # Calculate the L_SCL_text loss
+        if self.cfg.TRAINER.LORA.TEXT_LOSS_WEIGHT > 0:
+            loss_scl_text = F.l1_loss(
+                normalized_text_features, zs_clip_text_embeddings.cuda(), reduction='mean'
+            ) * self.cfg.TRAINER.LORA.TEXT_LOSS_WEIGHT
+            loss += loss_scl_text
+
+        # Calculate the L_SCL_image loss
+        if self.cfg.TRAINER.LORA.IMAGE_LOSS_WEIGHT > 0:        
+            loss_scl_image = F.l1_loss(
+                image_ft, zs_image_embedd.cuda(), reduction='mean'
+            ) * self.cfg.TRAINER.LORA.IMAGE_LOSS_WEIGHT
+            loss += loss_scl_image
+
+        # Now calculate L_SCL_logits
+        if self.cfg.TRAINER.LORA.LOGITS_LOSS_WEIGHT > 0:
+            L_SCL_logits = F.kl_div(
+                F.log_softmax(output / 1, dim=1),
+                F.log_softmax(zero_shot_logits / 1, dim=1),
+                reduction='sum',
+                log_target=True
+            ) * (1 * 1) / output.numel()
+            loss += L_SCL_logits * self.cfg.TRAINER.LORA.LOGITS_LOSS_WEIGHT
+
         self.model_backward_and_update(loss)
 
         loss_summary = {
@@ -366,27 +415,31 @@ class LoRA(TrainerX):
             raise ValueError(
                 f"Position mismatch: expected {self.cfg.TRAINER.LORA.POSITION}, found {metadata['position']}")
 
+        # Convert weights to FP16
         weights = loaded_data['weights']
         for i, layer in enumerate(self.lora_weights):
             layer_weights = weights[f'layer_{i}']
             if 'q' in self.cfg.TRAINER.LORA.PARAMS and 'q_proj' in layer_weights:
                 layer.q_proj.w_lora_A.data.copy_(
-                    layer_weights['q_proj']['w_lora_A'])
+                    layer_weights['q_proj']['w_lora_A'].half())
                 layer.q_proj.w_lora_B.data.copy_(
-                    layer_weights['q_proj']['w_lora_B'])
+                    layer_weights['q_proj']['w_lora_B'].half())
             if 'k' in self.cfg.TRAINER.LORA.PARAMS and 'k_proj' in layer_weights:
                 layer.k_proj.w_lora_A.data.copy_(
-                    layer_weights['k_proj']['w_lora_A'])
+                    layer_weights['k_proj']['w_lora_A'].half())
                 layer.k_proj.w_lora_B.data.copy_(
-                    layer_weights['k_proj']['w_lora_B'])
+                    layer_weights['k_proj']['w_lora_B'].half())
             if 'v' in self.cfg.TRAINER.LORA.PARAMS and 'v_proj' in layer_weights:
                 layer.v_proj.w_lora_A.data.copy_(
-                    layer_weights['v_proj']['w_lora_A'])
+                    layer_weights['v_proj']['w_lora_A'].half())
                 layer.v_proj.w_lora_B.data.copy_(
-                    layer_weights['v_proj']['w_lora_B'])
+                    layer_weights['v_proj']['w_lora_B'].half())
             if 'o' in self.cfg.TRAINER.LORA.PARAMS and 'proj' in layer_weights:
-                layer.proj.w_lora_A.data.copy_(layer_weights['proj']['w_lora_A'])
-                layer.proj.w_lora_B.data.copy_(layer_weights['proj']['w_lora_B'])
+                layer.proj.w_lora_A.data.copy_(
+                    layer_weights['proj']['w_lora_A'].half())
+                layer.proj.w_lora_B.data.copy_(
+                    layer_weights['proj']['w_lora_B'].half())
+
 
         print(f'LoRA weights loaded from {load_path}')
 
