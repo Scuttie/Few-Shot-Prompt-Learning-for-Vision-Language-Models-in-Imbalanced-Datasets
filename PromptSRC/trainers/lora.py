@@ -1,3 +1,5 @@
+from sklearn.metrics import classification_report
+from tqdm import tqdm
 import numpy as np
 import os.path as osp
 import os
@@ -219,12 +221,22 @@ class PromptLearner(nn.Module):
         prompts = [prompt_prefix + " " + name + "." for name in classnames]
 
         tokenized_prompts = torch.cat([clip.tokenize(p) for p in prompts])
-        # clip_model_temp = load_clip_to_cpu(cfg, True).type(dtype)
+
+        clip_model_temp = load_clip_to_cpu(cfg, True).type(dtype).cuda()
         clip_model_temp_image = load_clip_to_cpu(cfg, True)
         with torch.no_grad():
             embedding = clip_model.token_embedding(tokenized_prompts).type(dtype).cuda()
             self.ZS_image_encoder = clip_model_temp_image.visual
-        self.fixed_embeddings = embedding.clone().detach().mean(dim=1)
+            # Now pre-compute the frozen VL embeddings
+            single_template = "a photo of a {}."
+            all_teacher_features = []
+            x = [single_template.replace("{}", name) for name in classnames]
+            x_tokenized = torch.cat([clip.tokenize(p) for p in x])
+            text_features = clip_model_temp.encode_text(x_tokenized.cuda())
+            all_teacher_features.append(text_features.unsqueeze(1))
+            self.fixed_embeddings = torch.cat(all_teacher_features, dim=1).mean(dim=1)  #
+            
+        self.fixed_embeddings = torch.cat(all_teacher_features, dim=1).mean(dim=1).cuda()
     
         self.n_cls = n_cls
         self.n_ctx = n_ctx
@@ -305,6 +317,15 @@ class LoRA(TrainerX):
         print("Turning off gradients in both the image and the text encoder")
         mark_only_lora_as_trainable(clip_model)
 
+        for name, param in self.model.named_parameters():
+            if "prompt_learner" not in name:
+                # Make sure that VPT prompts are updated
+                if "VPT" in name:
+                    param.requires_grad_(True)
+            else:
+                if "ZS_image_encoder" in name:
+                    param.requires_grad_(False)
+
         # Double check
         enabled = set()
         for name, param in self.model.named_parameters():
@@ -317,6 +338,7 @@ class LoRA(TrainerX):
         # NOTE: only give LoRA to the optimizer
         self.optim = build_optimizer(get_lora_parameters(self.model), cfg.OPTIM)
         self.sched = build_lr_scheduler(self.optim, cfg.OPTIM) # eta_min=1e-6 is not applied
+        self.list_lora_layers = list_lora_layers
         self.lora_weights = self.make_weight(list_lora_layers)
         self.register_model("prompt_learner", self.model.prompt_learner, self.optim, self.sched)
 
@@ -417,7 +439,7 @@ class LoRA(TrainerX):
 
         # Convert weights to FP16
         weights = loaded_data['weights']
-        for i, layer in enumerate(self.lora_weights):
+        for i, layer in enumerate(self.list_lora_layers):
             layer_weights = weights[f'layer_{i}']
             if 'q' in self.cfg.TRAINER.LORA.PARAMS and 'q_proj' in layer_weights:
                 layer.q_proj.w_lora_A.data.copy_(
@@ -439,7 +461,6 @@ class LoRA(TrainerX):
                     layer_weights['proj']['w_lora_A'].half())
                 layer.proj.w_lora_B.data.copy_(
                     layer_weights['proj']['w_lora_B'].half())
-
 
         print(f'LoRA weights loaded from {load_path}')
 
@@ -498,4 +519,121 @@ class LoRA(TrainerX):
 
             weights[f'layer_{i}'] = layer_weights
         return weights
-    
+
+
+    @torch.no_grad()
+    def test(self, split=None, return_pred=False):
+        """A generic testing pipeline."""
+        self.set_model_mode("eval")
+        self.evaluator.reset()
+
+        if split is None:
+            split = self.cfg.TEST.SPLIT
+
+        if split == "val" and self.val_loader is not None:
+            data_loader = self.val_loader
+        else:
+            split = "test"  # in case val_loader is None
+            data_loader = self.test_loader
+
+        print(f"Evaluate on the *{split}* set")
+
+        all_preds = []
+        all_labels = []
+
+        for batch_idx, batch in enumerate(tqdm(data_loader)):
+            input, label = self.parse_batch_test(batch)
+            output = self.model_inference(input)
+            self.evaluator.process(output, label)
+
+            preds = torch.argmax(output, dim=1)
+            all_preds.append(preds.cpu().numpy())
+            all_labels.append(label.cpu().numpy())
+
+        results = self.evaluator.evaluate()
+
+        for k, v in results.items():
+            tag = f"{split}/{k}"
+            self.write_scalar(tag, v, self.epoch)
+
+        # ---------------------------
+        # (A) Alias 매핑
+        # ---------------------------
+        dataset_alias = {
+            "DescribableTextures": "dtd",
+            "OxfordPets": "oxford_pets",
+            "OxfordFlowers": "oxford_flowers",
+            "FGVCAircraft": "fgvc_aircraft",
+            "Caltech101": "caltech101",
+            "EuroSAT": "eurosat",
+            "Food101": "food101",
+            "UCF101": "ucf101",
+            "StanfordCars": "stanford_cars",
+            "SUN397": "sun397",
+            "ImageNet": "imagenet"
+            # 필요에 따라 추가
+        }
+
+        # ---------------------------
+        # (B) base_label_count 매핑
+        # ---------------------------
+        dataset_name_to_basecount = {
+            "dtd": 24,
+            "oxford_pets": 19,
+            "oxford_flowers": 51,
+            "fgvc_aircraft": 50,
+            "caltech101": 51,
+            "food101": 51,
+            "ucf101": 51,
+            "stanford_cars": 98,
+            "sun397": 199,
+            "eurosat": 5,
+            "imagenet": 500
+        }
+        # Dassl 프레임워크에서 불러온 config상 dataset name
+        dataset_name = self.cfg.DATASET.NAME
+
+        # Alias 변환
+        if dataset_name in dataset_alias:
+            alias_name = dataset_alias[dataset_name]
+            print(f"[INFO] Convert dataset_name '{dataset_name}' -> alias '{alias_name}'")
+        else:
+            alias_name = dataset_name
+
+        # base_label_count 결정
+        if alias_name in dataset_name_to_basecount:
+            base_label_count = dataset_name_to_basecount[alias_name]
+            print(f"[INFO] base_label_count={base_label_count}")
+        else:
+            base_label_count = 0
+            print(f"[WARNING] alias_name '{alias_name}' not in dict; base_label_count set to 0")
+
+        print("\n===========================")
+        print("Classification Report")
+        print("===========================")
+        y_true = np.concatenate(all_labels)
+        y_pred = np.concatenate(all_preds)
+
+        print(classification_report(y_true, y_pred))
+
+        if base_label_count > 0:
+            y_true_t = torch.tensor(y_true)
+            y_pred_t = torch.tensor(y_pred)
+            base_mask = (y_true_t < base_label_count)
+            new_mask = (y_true_t >= base_label_count)
+            base_correct = (y_pred_t[base_mask] == y_true_t[base_mask]).sum().item()
+            new_correct = (y_pred_t[new_mask] == y_true_t[new_mask]).sum().item()
+            base_total = base_mask.sum().item()
+            new_total = new_mask.sum().item()
+            base_acc = 100.0 * base_correct / base_total if base_total else 0.0
+            new_acc = 100.0 * new_correct / new_total if new_total else 0.0
+            print(f"Base class accuracy: {base_acc:.2f}% ({base_correct}/{base_total})")
+            print(f"New  class accuracy: {new_acc:.2f}% ({new_correct}/{new_total})")
+
+        if return_pred:
+            y_true = np.concatenate(all_labels)
+            y_pred = np.concatenate(all_preds)
+            return y_true, y_pred
+
+
+        return list(results.values())[0]
